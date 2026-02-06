@@ -3,9 +3,6 @@ package alerts
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,32 +14,12 @@ import (
 	"github.com/kris-hansen/feelgoodbot/internal/scanner"
 )
 
-// ClawdbotPayload is the webhook payload sent to Clawdbot
-type ClawdbotPayload struct {
-	Event     string    `json:"event"`
-	Timestamp time.Time `json:"timestamp"`
-	Hostname  string    `json:"hostname"`
-	Severity  string    `json:"severity"`
-	Summary   string    `json:"summary"`
-	Details   Details   `json:"details"`
-}
-
-// Details contains the detailed change information
-type Details struct {
-	FilesScanned   int             `json:"files_scanned"`
-	TotalChanges   int             `json:"total_changes"`
-	CriticalCount  int             `json:"critical_count"`
-	WarningCount   int             `json:"warning_count"`
-	Changes        []ChangeDetail  `json:"changes"`
-}
-
-// ChangeDetail is a simplified change for the webhook
-type ChangeDetail struct {
-	Path     string `json:"path"`
-	Type     string `json:"type"`
-	Severity string `json:"severity"`
-	Category string `json:"category"`
-	Details  string `json:"details,omitempty"`
+// ClawdbotAgentPayload is the webhook payload for Clawdbot's /hooks/agent endpoint
+type ClawdbotAgentPayload struct {
+	Message string `json:"message"`          // The alert message
+	Name    string `json:"name"`             // Hook name (e.g., "feelgoodbot")
+	Deliver bool   `json:"deliver"`          // Whether to deliver to chat
+	Channel string `json:"channel,omitempty"` // Target channel (telegram, last, etc.)
 }
 
 // Alert represents a security alert
@@ -108,54 +85,16 @@ func (a *Alerter) Send(alert Alert) error {
 	return nil
 }
 
-// sendClawdbot sends alert to Clawdbot webhook
+// sendClawdbot sends alert to Clawdbot's /hooks/agent endpoint
 func (a *Alerter) sendClawdbot(alert Alert) error {
-	// Build change details
-	changes := make([]ChangeDetail, 0, len(alert.Changes))
-	for _, c := range alert.Changes {
-		changes = append(changes, ChangeDetail{
-			Path:     c.Path,
-			Type:     c.Type,
-			Severity: c.Severity.String(),
-			Category: c.Category,
-			Details:  c.Details,
-		})
-	}
+	// Build the alert message
+	message := formatAlertMessage(alert)
 
-	// Count by severity
-	critical := 0
-	warning := 0
-	for _, c := range alert.Changes {
-		switch c.Severity {
-		case scanner.SeverityCritical:
-			critical++
-		case scanner.SeverityWarning:
-			warning++
-		}
-	}
-
-	// Build summary message
-	var summary string
-	if critical > 0 {
-		summary = fmt.Sprintf("🚨 CRITICAL: %d file(s) tampered on %s!", critical, alert.Hostname)
-	} else if warning > 0 {
-		summary = fmt.Sprintf("⚠️ WARNING: %d suspicious change(s) on %s", warning, alert.Hostname)
-	} else {
-		summary = fmt.Sprintf("ℹ️ %d change(s) detected on %s", len(alert.Changes), alert.Hostname)
-	}
-
-	payload := ClawdbotPayload{
-		Event:     "feelgoodbot.alert",
-		Timestamp: alert.Timestamp,
-		Hostname:  alert.Hostname,
-		Severity:  alert.Severity.String(),
-		Summary:   summary,
-		Details: Details{
-			TotalChanges:  len(alert.Changes),
-			CriticalCount: critical,
-			WarningCount:  warning,
-			Changes:       changes,
-		},
+	payload := ClawdbotAgentPayload{
+		Message: message,
+		Name:    "feelgoodbot",
+		Deliver: true,
+		Channel: "last", // Use last active channel
 	}
 
 	data, err := json.Marshal(payload)
@@ -170,12 +109,10 @@ func (a *Alerter) sendClawdbot(alert Alert) error {
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "feelgoodbot/0.1")
-	req.Header.Set("X-Feelgoodbot-Event", "security_alert")
 	
-	// Add HMAC signature if secret is configured
+	// Auth via x-clawdbot-token header
 	if a.clawdbotSecret != "" {
-		sig := computeHMAC(data, a.clawdbotSecret)
-		req.Header.Set("X-Feelgoodbot-Signature", sig)
+		req.Header.Set("x-clawdbot-token", a.clawdbotSecret)
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -190,6 +127,60 @@ func (a *Alerter) sendClawdbot(alert Alert) error {
 	}
 
 	return nil
+}
+
+// formatAlertMessage builds a human-readable alert message
+func formatAlertMessage(alert Alert) string {
+	var sb strings.Builder
+
+	// Count by severity
+	critical := 0
+	warning := 0
+	for _, c := range alert.Changes {
+		switch c.Severity {
+		case scanner.SeverityCritical:
+			critical++
+		case scanner.SeverityWarning:
+			warning++
+		}
+	}
+
+	// Header
+	if critical > 0 {
+		sb.WriteString(fmt.Sprintf("🚨 **CRITICAL: %d file(s) tampered on %s!**\n\n", critical, alert.Hostname))
+	} else if warning > 0 {
+		sb.WriteString(fmt.Sprintf("⚠️ **WARNING: %d suspicious change(s) on %s**\n\n", warning, alert.Hostname))
+	} else {
+		sb.WriteString(fmt.Sprintf("ℹ️ **%d change(s) detected on %s**\n\n", len(alert.Changes), alert.Hostname))
+	}
+
+	// List changes (limit to 10 for readability)
+	maxShow := 10
+	for i, c := range alert.Changes {
+		if i >= maxShow {
+			sb.WriteString(fmt.Sprintf("\n... and %d more files", len(alert.Changes)-maxShow))
+			break
+		}
+		
+		emoji := "📄"
+		switch c.Severity {
+		case scanner.SeverityCritical:
+			emoji = "🔴"
+		case scanner.SeverityWarning:
+			emoji = "🟡"
+		}
+		
+		sb.WriteString(fmt.Sprintf("%s `%s` (%s", emoji, c.Path, c.Type))
+		if c.Category != "" {
+			sb.WriteString(fmt.Sprintf(", %s", c.Category))
+		}
+		sb.WriteString(")\n")
+	}
+
+	// Timestamp
+	sb.WriteString(fmt.Sprintf("\n🕐 Detected at %s", alert.Timestamp.Format("2006-01-02 15:04:05 MST")))
+
+	return sb.String()
 }
 
 // sendSlack sends alert to Slack webhook
@@ -286,13 +277,6 @@ func (a *Alerter) sendLocalNotification(alert Alert) error {
 	
 	cmd := exec.Command("osascript", "-e", script)
 	return cmd.Run()
-}
-
-// computeHMAC computes HMAC-SHA256 signature
-func computeHMAC(message []byte, secret string) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(message)
-	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 // Response actions

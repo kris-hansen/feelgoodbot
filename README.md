@@ -80,7 +80,8 @@ scan_interval: 5m
 alerts:
   clawdbot:
     enabled: true
-    webhook: "http://localhost:3033/webhook/feelgoodbot"
+    webhook: "http://127.0.0.1:18789/hooks/agent"
+    secret: "your-clawdbot-hooks-token"
   
   slack:
     enabled: false
@@ -120,61 +121,59 @@ response:
 
 ## Clawdbot Integration
 
-feelgoodbot can alert Clawdbot when tampering is detected.
+feelgoodbot can alert Clawdbot when tampering is detected. Works locally or remotely.
 
-### Setup
+### Clawdbot Setup
 
-1. Start the daemon with the Clawdbot webhook URL:
-```bash
-feelgoodbot daemon install --interval 5m
-feelgoodbot daemon start
-```
-
-2. Or run with webhook explicitly:
-```bash
-feelgoodbot daemon run --clawdbot "http://localhost:3033/webhook/feelgoodbot"
-```
-
-### Webhook Payload
-
-When tampering is detected, feelgoodbot POSTs to your webhook:
+Enable webhook ingress in your Clawdbot config (`~/.clawdbot/clawdbot.json`):
 
 ```json
 {
-  "event": "feelgoodbot.alert",
-  "timestamp": "2026-02-06T16:00:00Z",
-  "hostname": "macbook.local",
-  "severity": "CRITICAL",
-  "summary": "🚨 CRITICAL: 3 file(s) tampered on macbook.local!",
-  "details": {
-    "total_changes": 3,
-    "critical_count": 3,
-    "warning_count": 0,
-    "changes": [
-      {
-        "path": "/Library/LaunchDaemons/malware.plist",
-        "type": "added",
-        "severity": "CRITICAL",
-        "category": "persistence"
-      }
-    ]
+  "hooks": {
+    "enabled": true,
+    "token": "your-shared-secret",
+    "path": "/hooks"
   }
+}
+```
+
+### feelgoodbot Configuration
+
+```yaml
+# ~/.config/feelgoodbot/config.yaml
+alerts:
+  clawdbot:
+    enabled: true
+    webhook: "http://127.0.0.1:18789/hooks/agent"  # Local Clawdbot
+    secret: "your-shared-secret"                    # Matches hooks.token
+```
+
+For remote Clawdbot, change the webhook URL to your server's address.
+
+### Webhook Payload
+
+feelgoodbot uses Clawdbot's `/hooks/agent` endpoint:
+
+```json
+{
+  "message": "🚨 **CRITICAL: 3 file(s) tampered on macbook.local!**\n\n🔴 `/Library/LaunchDaemons/malware.plist` (added, persistence)\n...",
+  "name": "feelgoodbot",
+  "deliver": true,
+  "channel": "last"
 }
 ```
 
 ### Headers
 
 - `Content-Type: application/json`
-- `X-Feelgoodbot-Event: security_alert`
-- `X-Feelgoodbot-Signature: sha256=...` (HMAC if secret configured)
+- `x-clawdbot-token: <secret>` (auth token)
 
-### Clawdbot Actions
+### What Happens
 
-When an alert fires, Clawdbot can:
-- Send you a Telegram/Signal/Discord message
-- Trigger emergency protocols
-- Log for forensic analysis
-- Execute response actions
+When an alert fires, Clawdbot:
+1. Receives the webhook and runs an isolated agent session
+2. Sends you a message on your last active channel (Telegram, Signal, etc.)
+3. Can execute follow-up actions based on the alert
 
 ## Severity Levels
 
