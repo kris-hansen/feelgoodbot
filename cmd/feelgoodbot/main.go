@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/kris-hansen/feelgoodbot/internal/daemon"
 	"github.com/kris-hansen/feelgoodbot/internal/scanner"
 	"github.com/kris-hansen/feelgoodbot/internal/snapshot"
 	"github.com/kris-hansen/feelgoodbot/pkg/indicators"
@@ -36,9 +40,10 @@ Based on analysis of real-world attacks including:
   • Various coding agent compromises
 
 Quick start:
-  feelgoodbot init      # Create baseline snapshot
-  feelgoodbot scan      # Check for changes
-  feelgoodbot daemon    # Start continuous monitoring`,
+  feelgoodbot init           # Create baseline snapshot
+  feelgoodbot scan           # Check for changes
+  feelgoodbot daemon install # Install as boot service
+  feelgoodbot daemon start   # Start monitoring`,
 	Version: version,
 }
 
@@ -97,9 +102,9 @@ var initCmd = &cobra.Command{
 		fmt.Printf("✅ Baseline snapshot created (ID: %s)\n", snap.ID)
 		fmt.Println()
 		fmt.Println("Next steps:")
-		fmt.Println("  feelgoodbot scan     - Run integrity check")
-		fmt.Println("  feelgoodbot diff     - Show changes since baseline")
-		fmt.Println("  feelgoodbot daemon   - Start continuous monitoring")
+		fmt.Println("  feelgoodbot scan           - Run integrity check")
+		fmt.Println("  feelgoodbot daemon install - Install as boot service")
+		fmt.Println("  feelgoodbot daemon start   - Start monitoring")
 		return nil
 	},
 }
@@ -279,22 +284,135 @@ var diffCmd = &cobra.Command{
 	},
 }
 
+// Daemon command flags
+var (
+	daemonInterval   string
+	daemonClawdbot   string
+	daemonForeground bool
+)
+
 // daemon command - background monitoring
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
 	Short: "Manage background monitoring daemon",
+	Long: `Manage the feelgoodbot background monitoring daemon.
+
+The daemon continuously monitors your system for file integrity changes
+and can alert you via local notifications or Clawdbot webhooks.
+
+Commands:
+  install   Install as a launchd service (runs on boot)
+  uninstall Remove the launchd service
+  start     Start the daemon (via launchd or foreground)
+  stop      Stop the running daemon
+  run       Run daemon in foreground (used by launchd)
+  status    Show daemon status`,
+}
+
+var daemonInstallCmd = &cobra.Command{
+	Use:   "install",
+	Short: "Install as a launchd service (runs on boot)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Get binary path
+		binaryPath, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("failed to get executable path: %w", err)
+		}
+		
+		// Resolve symlinks
+		binaryPath, err = filepath.EvalSymlinks(binaryPath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve binary path: %w", err)
+		}
+
+		// Parse interval
+		interval := 5 * time.Minute
+		if daemonInterval != "" {
+			parsed, err := time.ParseDuration(daemonInterval)
+			if err != nil {
+				return fmt.Errorf("invalid interval: %w", err)
+			}
+			interval = parsed
+		}
+
+		fmt.Println("📦 Installing feelgoodbot daemon...")
+		fmt.Printf("   Binary: %s\n", binaryPath)
+		fmt.Printf("   Interval: %s\n", interval)
+		fmt.Println()
+
+		if err := daemon.Install(binaryPath, interval); err != nil {
+			return fmt.Errorf("failed to install: %w", err)
+		}
+
+		plistPath := daemon.LaunchdPlistPath()
+		fmt.Printf("✅ Installed launchd service: %s\n", plistPath)
+		fmt.Println()
+		fmt.Println("To start the daemon:")
+		fmt.Println("  feelgoodbot daemon start")
+		fmt.Println()
+		fmt.Println("The daemon will start automatically on boot.")
+		return nil
+	},
+}
+
+var daemonUninstallCmd = &cobra.Command{
+	Use:   "uninstall",
+	Short: "Remove the launchd service",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Println("🗑️  Uninstalling feelgoodbot daemon...")
+
+		// Stop first if running
+		status := daemon.GetStatus("")
+		if status.Running {
+			fmt.Println("   Stopping daemon...")
+			exec.Command("launchctl", "unload", daemon.LaunchdPlistPath()).Run()
+		}
+
+		if err := daemon.Uninstall(); err != nil {
+			return fmt.Errorf("failed to uninstall: %w", err)
+		}
+
+		fmt.Println("✅ Daemon uninstalled")
+		return nil
+	},
 }
 
 var daemonStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the monitoring daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Check if plist exists
+		plistPath := daemon.LaunchdPlistPath()
+		if _, err := os.Stat(plistPath); os.IsNotExist(err) {
+			fmt.Println("❌ Daemon not installed. Run 'feelgoodbot daemon install' first.")
+			return nil
+		}
+
+		// Check if already running
+		status := daemon.GetStatus("")
+		if status.Running {
+			fmt.Printf("ℹ️  Daemon already running (PID %d)\n", status.PID)
+			return nil
+		}
+
 		fmt.Println("🚀 Starting feelgoodbot daemon...")
-		fmt.Println()
-		fmt.Println("   TODO: Implement launchd integration")
-		fmt.Println()
-		fmt.Println("For now, you can run periodic scans with:")
-		fmt.Println("  watch -n 300 feelgoodbot scan")
+
+		// Load via launchctl
+		output, err := exec.Command("launchctl", "load", plistPath).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to start daemon: %w\n%s", err, output)
+		}
+
+		// Wait a moment and check status
+		time.Sleep(500 * time.Millisecond)
+		status = daemon.GetStatus("")
+		if status.Running {
+			fmt.Printf("✅ Daemon started (PID %d)\n", status.PID)
+		} else {
+			fmt.Println("⚠️  Daemon may have failed to start. Check logs:")
+			fmt.Println("   ~/.config/feelgoodbot/daemon.log")
+		}
+
 		return nil
 	},
 }
@@ -303,25 +421,119 @@ var daemonStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the monitoring daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		status := daemon.GetStatus("")
+		if !status.Running {
+			fmt.Println("ℹ️  Daemon is not running")
+			return nil
+		}
+
 		fmt.Println("🛑 Stopping feelgoodbot daemon...")
-		fmt.Println("   TODO: Implement daemon stop")
+
+		plistPath := daemon.LaunchdPlistPath()
+		if _, err := os.Stat(plistPath); err == nil {
+			// Unload via launchctl
+			exec.Command("launchctl", "unload", plistPath).Run()
+		} else {
+			// Kill directly
+			if p, err := os.FindProcess(status.PID); err == nil {
+				p.Signal(os.Interrupt)
+			}
+		}
+
+		fmt.Println("✅ Daemon stopped")
+		return nil
+	},
+}
+
+var daemonRunCmd = &cobra.Command{
+	Use:   "run",
+	Short: "Run daemon in foreground (used by launchd)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Parse interval
+		interval := 5 * time.Minute
+		if daemonInterval != "" {
+			parsed, err := time.ParseDuration(daemonInterval)
+			if err != nil {
+				return fmt.Errorf("invalid interval: %w", err)
+			}
+			interval = parsed
+		}
+
+		// Build config
+		cfg := daemon.DefaultConfig()
+		cfg.ScanInterval = interval
+
+		if daemonClawdbot != "" {
+			cfg.AlertConfig.ClawdbotURL = daemonClawdbot
+		}
+
+		// Create and run daemon
+		d, err := daemon.New(cfg)
+		if err != nil {
+			return fmt.Errorf("failed to create daemon: %w", err)
+		}
+
+		return d.Run(context.Background())
+	},
+}
+
+var daemonStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show daemon status",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		status := daemon.GetStatus("")
+		
+		fmt.Println("📊 Daemon Status")
+		fmt.Println()
+		
+		if status.Running {
+			fmt.Printf("   Status:  🟢 Running (PID %d)\n", status.PID)
+		} else {
+			fmt.Println("   Status:  🔴 Stopped")
+		}
+
+		// Check if installed
+		plistPath := daemon.LaunchdPlistPath()
+		if _, err := os.Stat(plistPath); err == nil {
+			fmt.Println("   Service: ✓ Installed (runs on boot)")
+		} else {
+			fmt.Println("   Service: ✗ Not installed")
+		}
+
+		// Check logs
+		home, _ := os.UserHomeDir()
+		logPath := filepath.Join(home, ".config/feelgoodbot/daemon.log")
+		if info, err := os.Stat(logPath); err == nil {
+			fmt.Printf("   Log:     %s (%.1f KB)\n", logPath, float64(info.Size())/1024)
+		}
+
 		return nil
 	},
 }
 
 func init() {
+	// Add flags to daemon commands
+	daemonInstallCmd.Flags().StringVar(&daemonInterval, "interval", "5m", "Scan interval (e.g., 5m, 1h)")
+	daemonRunCmd.Flags().StringVar(&daemonInterval, "interval", "5m", "Scan interval (e.g., 5m, 1h)")
+	daemonRunCmd.Flags().StringVar(&daemonClawdbot, "clawdbot", "", "Clawdbot webhook URL for alerts")
+
+	daemonCmd.AddCommand(daemonInstallCmd)
+	daemonCmd.AddCommand(daemonUninstallCmd)
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
+	daemonCmd.AddCommand(daemonRunCmd)
+	daemonCmd.AddCommand(daemonStatusCmd)
 }
 
 // status command - show status
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show daemon status and last scan results",
+	Short: "Show feelgoodbot status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("📊 feelgoodbot status")
 		fmt.Println()
 
+		// Baseline info
 		store, err := snapshot.NewStore()
 		if err != nil {
 			fmt.Println("Baseline:    error accessing store")
@@ -337,7 +549,22 @@ var statusCmd = &cobra.Command{
 			fmt.Println("Baseline:    not initialized (run 'feelgoodbot init')")
 		}
 
-		fmt.Println("Daemon:      not running")
+		// Daemon info
+		status := daemon.GetStatus("")
+		if status.Running {
+			fmt.Printf("Daemon:      🟢 running (PID %d)\n", status.PID)
+		} else {
+			fmt.Println("Daemon:      🔴 stopped")
+		}
+
+		// Service info
+		plistPath := daemon.LaunchdPlistPath()
+		if _, err := os.Stat(plistPath); err == nil {
+			fmt.Println("Service:     ✓ installed (runs on boot)")
+		} else {
+			fmt.Println("Service:     ✗ not installed")
+		}
+
 		fmt.Printf("Indicators:  %d paths configured\n", len(indicators.DefaultIndicators()))
 
 		return nil
