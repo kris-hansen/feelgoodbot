@@ -11,10 +11,10 @@ import (
 
 // Config represents the application configuration
 type Config struct {
-	Indicators   IndicatorConfig   `mapstructure:"indicators"`
-	ScanInterval time.Duration     `mapstructure:"scan_interval"`
-	Alerts       AlertConfig       `mapstructure:"alerts"`
-	Response     ResponseConfig    `mapstructure:"response"`
+	Indicators   IndicatorConfig `mapstructure:"indicators"`
+	ScanInterval time.Duration   `mapstructure:"scan_interval"`
+	Alerts       AlertConfig     `mapstructure:"alerts"`
+	Response     ResponseConfig  `mapstructure:"response"`
 }
 
 // IndicatorConfig configures what to monitor
@@ -35,12 +35,12 @@ type AlertConfig struct {
 		Webhook string `mapstructure:"webhook"`
 		Secret  string `mapstructure:"secret"`
 	} `mapstructure:"clawdbot"`
-	
+
 	Slack struct {
 		Enabled    bool   `mapstructure:"enabled"`
 		WebhookURL string `mapstructure:"webhook_url"`
 	} `mapstructure:"slack"`
-	
+
 	LocalNotification bool `mapstructure:"local_notification"`
 }
 

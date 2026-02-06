@@ -16,9 +16,9 @@ import (
 
 // ClawdbotAgentPayload is the webhook payload for Clawdbot's /hooks/agent endpoint
 type ClawdbotAgentPayload struct {
-	Message string `json:"message"`          // The alert message
-	Name    string `json:"name"`             // Hook name (e.g., "feelgoodbot")
-	Deliver bool   `json:"deliver"`          // Whether to deliver to chat
+	Message string `json:"message"`           // The alert message
+	Name    string `json:"name"`              // Hook name (e.g., "feelgoodbot")
+	Deliver bool   `json:"deliver"`           // Whether to deliver to chat
 	Channel string `json:"channel,omitempty"` // Target channel (telegram, last, etc.)
 }
 
@@ -109,7 +109,7 @@ func (a *Alerter) sendClawdbot(alert Alert) error {
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "feelgoodbot/0.1")
-	
+
 	// Auth via x-clawdbot-token header
 	if a.clawdbotSecret != "" {
 		req.Header.Set("x-clawdbot-token", a.clawdbotSecret)
@@ -161,7 +161,7 @@ func formatAlertMessage(alert Alert) string {
 			sb.WriteString(fmt.Sprintf("\n... and %d more files", len(alert.Changes)-maxShow))
 			break
 		}
-		
+
 		emoji := "📄"
 		switch c.Severity {
 		case scanner.SeverityCritical:
@@ -169,7 +169,7 @@ func formatAlertMessage(alert Alert) string {
 		case scanner.SeverityWarning:
 			emoji = "🟡"
 		}
-		
+
 		sb.WriteString(fmt.Sprintf("%s `%s` (%s", emoji, c.Path, c.Type))
 		if c.Category != "" {
 			sb.WriteString(fmt.Sprintf(", %s", c.Category))
@@ -187,7 +187,7 @@ func formatAlertMessage(alert Alert) string {
 func (a *Alerter) sendSlack(alert Alert) error {
 	emoji := "ℹ️"
 	color := "#36a64f"
-	
+
 	switch alert.Severity {
 	case scanner.SeverityWarning:
 		emoji = "⚠️"
@@ -252,7 +252,7 @@ func (a *Alerter) sendSlack(alert Alert) error {
 // sendLocalNotification uses macOS notification center
 func (a *Alerter) sendLocalNotification(alert Alert) error {
 	title := "feelgoodbot Alert"
-	
+
 	switch alert.Severity {
 	case scanner.SeverityCritical:
 		title = "🚨 CRITICAL: System Tampering Detected"
@@ -274,7 +274,7 @@ func (a *Alerter) sendLocalNotification(alert Alert) error {
 
 	script := fmt.Sprintf(`display notification %q with title %q sound name "Basso"`,
 		message, title)
-	
+
 	cmd := exec.Command("osascript", "-e", script)
 	return cmd.Run()
 }
@@ -293,7 +293,7 @@ func DisconnectNetwork() error {
 
 // Shutdown powers off the system
 func Shutdown() error {
-	return exec.Command("osascript", "-e", 
+	return exec.Command("osascript", "-e",
 		`tell app "System Events" to shut down`).Run()
 }
 

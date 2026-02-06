@@ -15,10 +15,10 @@ import (
 
 // Snapshot represents a point-in-time capture of file states
 type Snapshot struct {
-	ID        string                        `json:"id"`
-	CreatedAt time.Time                     `json:"created_at"`
-	Files     map[string]*scanner.FileInfo  `json:"files"`
-	Checksum  string                        `json:"checksum"` // integrity check
+	ID        string                       `json:"id"`
+	CreatedAt time.Time                    `json:"created_at"`
+	Files     map[string]*scanner.FileInfo `json:"files"`
+	Checksum  string                       `json:"checksum"` // integrity check
 }
 
 // Store manages snapshot persistence

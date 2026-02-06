@@ -274,7 +274,7 @@ var diffCmd = &cobra.Command{
 			}
 			if c.Before != nil && c.After != nil {
 				if c.Before.Hash != c.After.Hash {
-					fmt.Printf("   └─ hash: %s... → %s...\n", 
+					fmt.Printf("   └─ hash: %s... → %s...\n",
 						truncate(c.Before.Hash, 16), truncate(c.After.Hash, 16))
 				}
 			}
@@ -318,7 +318,7 @@ var daemonInstallCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to get executable path: %w", err)
 		}
-		
+
 		// Resolve symlinks
 		binaryPath, err = filepath.EvalSymlinks(binaryPath)
 		if err != nil {
@@ -482,10 +482,10 @@ var daemonStatusCmd = &cobra.Command{
 	Short: "Show daemon status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		status := daemon.GetStatus("")
-		
+
 		fmt.Println("📊 Daemon Status")
 		fmt.Println()
-		
+
 		if status.Running {
 			fmt.Printf("   Status:  🟢 Running (PID %d)\n", status.PID)
 		} else {
@@ -602,7 +602,7 @@ var indicatorsListCmd = &cobra.Command{
 		fmt.Println()
 
 		inds := indicators.DefaultIndicators()
-		
+
 		// Group by category
 		byCategory := make(map[string][]indicators.Indicator)
 		for _, ind := range inds {
@@ -612,7 +612,7 @@ var indicatorsListCmd = &cobra.Command{
 		// Print in order
 		categoryOrder := []string{
 			"system_binaries",
-			"persistence", 
+			"persistence",
 			"privilege_escalation",
 			"ssh",
 			"shell_config",

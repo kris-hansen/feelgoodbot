@@ -81,12 +81,12 @@ type Change struct {
 
 // ScanResult contains the results of a scan
 type ScanResult struct {
-	StartTime   time.Time            `json:"start_time"`
-	EndTime     time.Time            `json:"end_time"`
-	FilesScanned int                 `json:"files_scanned"`
-	Changes     []Change             `json:"changes"`
-	Files       map[string]*FileInfo `json:"files"`
-	Errors      []string             `json:"errors,omitempty"`
+	StartTime    time.Time            `json:"start_time"`
+	EndTime      time.Time            `json:"end_time"`
+	FilesScanned int                  `json:"files_scanned"`
+	Changes      []Change             `json:"changes"`
+	Files        map[string]*FileInfo `json:"files"`
+	Errors       []string             `json:"errors,omitempty"`
 }
 
 // Scanner scans files for changes

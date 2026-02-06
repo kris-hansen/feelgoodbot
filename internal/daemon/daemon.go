@@ -62,7 +62,7 @@ func New(cfg Config) (*Daemon, error) {
 		if err := os.MkdirAll(filepath.Dir(cfg.LogFile), 0700); err != nil {
 			return nil, fmt.Errorf("failed to create log directory: %w", err)
 		}
-		
+
 		logFile, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open log file: %w", err)
@@ -157,7 +157,7 @@ func (d *Daemon) runScan() {
 	critical := scanner.FilterBySeverity(changes, scanner.SeverityCritical)
 	warnings := scanner.FilterBySeverity(changes, scanner.SeverityWarning)
 
-	d.logger.Printf("Detected %d changes (%d critical, %d warnings)", 
+	d.logger.Printf("Detected %d changes (%d critical, %d warnings)",
 		len(changes), len(critical), len(warnings)-len(critical))
 
 	// Save diff for forensics
@@ -168,7 +168,7 @@ func (d *Daemon) runScan() {
 	// Send alerts
 	if len(critical) > 0 || len(warnings) > 0 {
 		hostname := alerts.GetHostname()
-		
+
 		var message string
 		if len(critical) > 0 {
 			message = fmt.Sprintf("🚨 CRITICAL: %d file(s) tampered!", len(critical))
@@ -214,11 +214,11 @@ func (d *Daemon) writePidFile() error {
 	if d.config.PidFile == "" {
 		return nil
 	}
-	
+
 	if err := os.MkdirAll(filepath.Dir(d.config.PidFile), 0700); err != nil {
 		return err
 	}
-	
+
 	return os.WriteFile(d.config.PidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0600)
 }
 
@@ -331,7 +331,7 @@ func LaunchdPlistPath() string {
 // Install installs the daemon as a launchd service
 func Install(binaryPath string, scanInterval time.Duration) error {
 	plistPath := LaunchdPlistPath()
-	
+
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
 		return fmt.Errorf("failed to create LaunchAgents directory: %w", err)
@@ -349,7 +349,7 @@ func Install(binaryPath string, scanInterval time.Duration) error {
 // Uninstall removes the launchd service
 func Uninstall() error {
 	plistPath := LaunchdPlistPath()
-	
+
 	if _, err := os.Stat(plistPath); os.IsNotExist(err) {
 		return nil // Already uninstalled
 	}
@@ -361,7 +361,7 @@ func Uninstall() error {
 func WriteLastScan(result *scanner.ScanResult, changes []scanner.Change) error {
 	home, _ := os.UserHomeDir()
 	statusFile := filepath.Join(home, ".config/feelgoodbot/last_scan.json")
-	
+
 	status := map[string]interface{}{
 		"timestamp":     result.EndTime,
 		"files_scanned": result.FilesScanned,
