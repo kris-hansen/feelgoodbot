@@ -167,12 +167,16 @@ func (d *Daemon) runScan() {
 
 	// Send alerts
 	if len(critical) > 0 || len(warnings) > 0 {
-		hostname, _ := os.Hostname()
+		hostname := alerts.GetHostname()
 		
 		var message string
 		if len(critical) > 0 {
-			message = fmt.Sprintf("🚨 CRITICAL: %d file(s) tampered! ", len(critical))
-			for _, c := range critical {
+			message = fmt.Sprintf("🚨 CRITICAL: %d file(s) tampered!", len(critical))
+			for i, c := range critical {
+				if i >= 5 {
+					message += fmt.Sprintf("\n... and %d more", len(critical)-5)
+					break
+				}
 				message += fmt.Sprintf("\n• %s: %s", c.Type, c.Path)
 			}
 		} else {
@@ -193,12 +197,14 @@ func (d *Daemon) runScan() {
 
 		if err := d.alerter.Send(alert); err != nil {
 			d.logger.Printf("Error sending alert: %v", err)
+		} else {
+			d.logger.Println("Alert sent successfully")
 		}
 
 		// Execute response actions for critical changes
 		if len(critical) > 0 {
-			d.logger.Println("CRITICAL changes detected - executing response actions")
-			// Response actions would be configured - for now just log
+			d.logger.Println("CRITICAL changes detected - review immediately!")
+			// Future: configurable response actions (disconnect network, shutdown)
 		}
 	}
 }

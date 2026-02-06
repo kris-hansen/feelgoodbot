@@ -120,22 +120,61 @@ response:
 
 ## Clawdbot Integration
 
-feelgoodbot can alert Clawdbot when tampering is detected:
+feelgoodbot can alert Clawdbot when tampering is detected.
 
-```yaml
-# In Clawdbot config
-webhooks:
-  feelgoodbot:
-    enabled: true
-    actions:
-      critical: "alert_and_notify"
-      warning: "log_only"
+### Setup
+
+1. Start the daemon with the Clawdbot webhook URL:
+```bash
+feelgoodbot daemon install --interval 5m
+feelgoodbot daemon start
 ```
+
+2. Or run with webhook explicitly:
+```bash
+feelgoodbot daemon run --clawdbot "http://localhost:3033/webhook/feelgoodbot"
+```
+
+### Webhook Payload
+
+When tampering is detected, feelgoodbot POSTs to your webhook:
+
+```json
+{
+  "event": "feelgoodbot.alert",
+  "timestamp": "2026-02-06T16:00:00Z",
+  "hostname": "macbook.local",
+  "severity": "CRITICAL",
+  "summary": "🚨 CRITICAL: 3 file(s) tampered on macbook.local!",
+  "details": {
+    "total_changes": 3,
+    "critical_count": 3,
+    "warning_count": 0,
+    "changes": [
+      {
+        "path": "/Library/LaunchDaemons/malware.plist",
+        "type": "added",
+        "severity": "CRITICAL",
+        "category": "persistence"
+      }
+    ]
+  }
+}
+```
+
+### Headers
+
+- `Content-Type: application/json`
+- `X-Feelgoodbot-Event: security_alert`
+- `X-Feelgoodbot-Signature: sha256=...` (HMAC if secret configured)
+
+### Clawdbot Actions
 
 When an alert fires, Clawdbot can:
 - Send you a Telegram/Signal/Discord message
 - Trigger emergency protocols
 - Log for forensic analysis
+- Execute response actions
 
 ## Severity Levels
 

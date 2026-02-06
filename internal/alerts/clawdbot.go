@@ -1,4 +1,4 @@
-// Package alerts handles notifications when tampering is detected
+// Package alerts provides Clawdbot webhook integration for feelgoodbot
 package alerts
 
 import (
@@ -9,19 +9,57 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/kris-hansen/feelgoodbot/internal/scanner"
 )
 
+// ClawdbotPayload is the webhook payload sent to Clawdbot
+type ClawdbotPayload struct {
+	Event     string    `json:"event"`
+	Timestamp time.Time `json:"timestamp"`
+	Hostname  string    `json:"hostname"`
+	Severity  string    `json:"severity"`
+	Summary   string    `json:"summary"`
+	Details   Details   `json:"details"`
+}
+
+// Details contains the detailed change information
+type Details struct {
+	FilesScanned   int             `json:"files_scanned"`
+	TotalChanges   int             `json:"total_changes"`
+	CriticalCount  int             `json:"critical_count"`
+	WarningCount   int             `json:"warning_count"`
+	Changes        []ChangeDetail  `json:"changes"`
+}
+
+// ChangeDetail is a simplified change for the webhook
+type ChangeDetail struct {
+	Path     string `json:"path"`
+	Type     string `json:"type"`
+	Severity string `json:"severity"`
+	Category string `json:"category"`
+	Details  string `json:"details,omitempty"`
+}
+
 // Alert represents a security alert
 type Alert struct {
-	Timestamp time.Time         `json:"timestamp"`
-	Severity  scanner.Severity  `json:"severity"`
-	Message   string            `json:"message"`
-	Changes   []scanner.Change  `json:"changes"`
-	Hostname  string            `json:"hostname"`
+	Timestamp time.Time        `json:"timestamp"`
+	Severity  scanner.Severity `json:"severity"`
+	Message   string           `json:"message"`
+	Changes   []scanner.Change `json:"changes"`
+	Hostname  string           `json:"hostname"`
+}
+
+// Config holds alerter configuration
+type Config struct {
+	ClawdbotURL    string `yaml:"clawdbot_url"`
+	ClawdbotSecret string `yaml:"clawdbot_secret"`
+	SlackURL       string `yaml:"slack_url"`
+	LocalNotify    bool   `yaml:"local_notify"`
 }
 
 // Alerter sends alerts through various channels
@@ -30,14 +68,6 @@ type Alerter struct {
 	clawdbotSecret string
 	slackURL       string
 	localNotify    bool
-}
-
-// Config for alerter
-type Config struct {
-	ClawdbotURL    string `yaml:"clawdbot_url"`
-	ClawdbotSecret string `yaml:"clawdbot_secret"`
-	SlackURL       string `yaml:"slack_url"`
-	LocalNotify    bool   `yaml:"local_notify"`
 }
 
 // NewAlerter creates a new alerter with the given config
@@ -80,29 +110,78 @@ func (a *Alerter) Send(alert Alert) error {
 
 // sendClawdbot sends alert to Clawdbot webhook
 func (a *Alerter) sendClawdbot(alert Alert) error {
-	payload, err := json.Marshal(alert)
-	if err != nil {
-		return err
+	// Build change details
+	changes := make([]ChangeDetail, 0, len(alert.Changes))
+	for _, c := range alert.Changes {
+		changes = append(changes, ChangeDetail{
+			Path:     c.Path,
+			Type:     c.Type,
+			Severity: c.Severity.String(),
+			Category: c.Category,
+			Details:  c.Details,
+		})
 	}
 
-	req, err := http.NewRequest("POST", a.clawdbotURL, bytes.NewBuffer(payload))
+	// Count by severity
+	critical := 0
+	warning := 0
+	for _, c := range alert.Changes {
+		switch c.Severity {
+		case scanner.SeverityCritical:
+			critical++
+		case scanner.SeverityWarning:
+			warning++
+		}
+	}
+
+	// Build summary message
+	var summary string
+	if critical > 0 {
+		summary = fmt.Sprintf("🚨 CRITICAL: %d file(s) tampered on %s!", critical, alert.Hostname)
+	} else if warning > 0 {
+		summary = fmt.Sprintf("⚠️ WARNING: %d suspicious change(s) on %s", warning, alert.Hostname)
+	} else {
+		summary = fmt.Sprintf("ℹ️ %d change(s) detected on %s", len(alert.Changes), alert.Hostname)
+	}
+
+	payload := ClawdbotPayload{
+		Event:     "feelgoodbot.alert",
+		Timestamp: alert.Timestamp,
+		Hostname:  alert.Hostname,
+		Severity:  alert.Severity.String(),
+		Summary:   summary,
+		Details: Details{
+			TotalChanges:  len(alert.Changes),
+			CriticalCount: critical,
+			WarningCount:  warning,
+			Changes:       changes,
+		},
+	}
+
+	data, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", a.clawdbotURL, bytes.NewBuffer(data))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "feelgoodbot/0.1")
 	req.Header.Set("X-Feelgoodbot-Event", "security_alert")
 	
 	// Add HMAC signature if secret is configured
 	if a.clawdbotSecret != "" {
-		sig := computeHMAC(payload, a.clawdbotSecret)
+		sig := computeHMAC(data, a.clawdbotSecret)
 		req.Header.Set("X-Feelgoodbot-Signature", sig)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -127,11 +206,21 @@ func (a *Alerter) sendSlack(alert Alert) error {
 		color = "#ff0000"
 	}
 
+	// Build file list
+	var fileList strings.Builder
+	for i, c := range alert.Changes {
+		if i >= 10 {
+			fileList.WriteString(fmt.Sprintf("\n... and %d more", len(alert.Changes)-10))
+			break
+		}
+		fileList.WriteString(fmt.Sprintf("• `%s` (%s)\n", c.Path, c.Type))
+	}
+
 	payload := map[string]interface{}{
 		"attachments": []map[string]interface{}{
 			{
 				"color": color,
-				"title": fmt.Sprintf("%s feelgoodbot Security Alert", emoji),
+				"title": fmt.Sprintf("%s feelgoodbot Alert - %s", emoji, alert.Hostname),
 				"text":  alert.Message,
 				"fields": []map[string]interface{}{
 					{
@@ -141,8 +230,13 @@ func (a *Alerter) sendSlack(alert Alert) error {
 					},
 					{
 						"title": "Changes",
-						"value": fmt.Sprintf("%d files affected", len(alert.Changes)),
+						"value": fmt.Sprintf("%d files", len(alert.Changes)),
 						"short": true,
+					},
+					{
+						"title": "Affected Files",
+						"value": fileList.String(),
+						"short": false,
 					},
 				},
 				"ts": alert.Timestamp.Unix(),
@@ -167,10 +261,24 @@ func (a *Alerter) sendSlack(alert Alert) error {
 // sendLocalNotification uses macOS notification center
 func (a *Alerter) sendLocalNotification(alert Alert) error {
 	title := "feelgoodbot Alert"
-	message := alert.Message
 	
-	if alert.Severity == scanner.SeverityCritical {
+	switch alert.Severity {
+	case scanner.SeverityCritical:
 		title = "🚨 CRITICAL: System Tampering Detected"
+	case scanner.SeverityWarning:
+		title = "⚠️ Suspicious Changes Detected"
+	}
+
+	// Build message with top files
+	message := alert.Message
+	if len(alert.Changes) > 0 && len(message) < 200 {
+		message += "\n\nTop changes:"
+		for i, c := range alert.Changes {
+			if i >= 3 {
+				break
+			}
+			message += fmt.Sprintf("\n• %s", c.Path)
+		}
 	}
 
 	script := fmt.Sprintf(`display notification %q with title %q sound name "Basso"`,
@@ -196,8 +304,6 @@ func DisconnectNetwork() error {
 		// Try alternate interface
 		exec.Command("networksetup", "-setairportpower", "en1", "off").Run()
 	}
-	
-	// Could also disable Ethernet if needed
 	return nil
 }
 
@@ -226,4 +332,13 @@ func ExecuteResponse(severity scanner.Severity, actions []string) error {
 		}
 	}
 	return nil
+}
+
+// GetHostname returns the current hostname
+func GetHostname() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
+	return hostname
 }
