@@ -2,26 +2,34 @@
 package scanner
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
+
+	"github.com/kris-hansen/feelgoodbot/pkg/indicators"
 )
 
 // FileInfo represents metadata and hash of a monitored file
 type FileInfo struct {
-	Path       string      `json:"path"`
-	Hash       string      `json:"hash"`
-	Size       int64       `json:"size"`
-	Mode       os.FileMode `json:"mode"`
-	ModTime    time.Time   `json:"mod_time"`
-	Owner      int         `json:"owner"`
-	Group      int         `json:"group"`
-	Codesigned bool        `json:"codesigned,omitempty"`
-	SignedBy   string      `json:"signed_by,omitempty"`
+	Path        string      `json:"path"`
+	Hash        string      `json:"hash"`
+	Size        int64       `json:"size"`
+	Mode        os.FileMode `json:"mode"`
+	ModTime     time.Time   `json:"mod_time"`
+	Owner       uint32      `json:"owner"`
+	Group       uint32      `json:"group"`
+	Codesigned  bool        `json:"codesigned,omitempty"`
+	SignedBy    string      `json:"signed_by,omitempty"`
+	IsSymlink   bool        `json:"is_symlink,omitempty"`
+	SymlinkDest string      `json:"symlink_dest,omitempty"`
 }
 
 // Severity levels for detected changes
@@ -46,64 +54,73 @@ func (s Severity) String() string {
 	}
 }
 
+func (s Severity) Emoji() string {
+	switch s {
+	case SeverityInfo:
+		return "ℹ️"
+	case SeverityWarning:
+		return "⚠️"
+	case SeverityCritical:
+		return "🚨"
+	default:
+		return "❓"
+	}
+}
+
 // Change represents a detected file change
 type Change struct {
-	Path     string   `json:"path"`
-	Type     string   `json:"type"` // "added", "removed", "modified"
-	Severity Severity `json:"severity"`
-	Before   *FileInfo `json:"before,omitempty"`
-	After    *FileInfo `json:"after,omitempty"`
-	Details  string   `json:"details,omitempty"`
+	Path        string    `json:"path"`
+	Type        string    `json:"type"` // "added", "removed", "modified"
+	Severity    Severity  `json:"severity"`
+	Category    string    `json:"category"`
+	Before      *FileInfo `json:"before,omitempty"`
+	After       *FileInfo `json:"after,omitempty"`
+	Details     string    `json:"details,omitempty"`
+	Description string    `json:"description,omitempty"`
+}
+
+// ScanResult contains the results of a scan
+type ScanResult struct {
+	StartTime   time.Time            `json:"start_time"`
+	EndTime     time.Time            `json:"end_time"`
+	FilesScanned int                 `json:"files_scanned"`
+	Changes     []Change             `json:"changes"`
+	Files       map[string]*FileInfo `json:"files"`
+	Errors      []string             `json:"errors,omitempty"`
 }
 
 // Scanner scans files for changes
 type Scanner struct {
-	indicators []string
+	indicators []indicators.Indicator
+	verbose    bool
+}
+
+// Option configures the scanner
+type Option func(*Scanner)
+
+// WithVerbose enables verbose output
+func WithVerbose(v bool) Option {
+	return func(s *Scanner) {
+		s.verbose = v
+	}
+}
+
+// WithIndicators sets custom indicators
+func WithIndicators(inds []indicators.Indicator) Option {
+	return func(s *Scanner) {
+		s.indicators = inds
+	}
 }
 
 // New creates a new Scanner with default indicators
-func New() *Scanner {
-	return &Scanner{
-		indicators: DefaultIndicators(),
+func New(opts ...Option) *Scanner {
+	s := &Scanner{
+		indicators: indicators.DefaultIndicators(),
 	}
-}
-
-// DefaultIndicators returns the default macOS paths to monitor
-func DefaultIndicators() []string {
-	home, _ := os.UserHomeDir()
-	
-	return []string{
-		// System binaries
-		"/usr/bin",
-		"/usr/sbin",
-		"/bin",
-		"/sbin",
-		
-		// Persistence mechanisms (CRITICAL)
-		"/Library/LaunchDaemons",
-		"/Library/LaunchAgents",
-		filepath.Join(home, "Library/LaunchAgents"),
-		
-		// System configuration
-		"/etc/pam.d",
-		"/etc/sudoers",
-		"/etc/sudoers.d",
-		"/etc/ssh",
-		"/etc/hosts",
-		
-		// SSH keys
-		filepath.Join(home, ".ssh/authorized_keys"),
-		filepath.Join(home, ".ssh/config"),
-		
-		// Browser extensions (common locations)
-		filepath.Join(home, "Library/Application Support/Google/Chrome/Default/Extensions"),
-		filepath.Join(home, "Library/Application Support/Firefox/Profiles"),
-		filepath.Join(home, "Library/Safari/Extensions"),
-		
-		// Homebrew binaries
-		"/opt/homebrew/bin",
-		"/usr/local/bin",
+	for _, opt := range opts {
+		opt(s)
 	}
+	return s
 }
 
 // HashFile computes SHA-256 hash of a file
@@ -122,43 +139,119 @@ func HashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// CheckCodesign verifies if a binary is properly code-signed
+func CheckCodesign(path string) (signed bool, signer string) {
+	cmd := exec.Command("codesign", "-dv", "--verbose=2", path)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return false, ""
+	}
+
+	output := stderr.String()
+	if strings.Contains(output, "Authority=") {
+		// Extract signer
+		for _, line := range strings.Split(output, "\n") {
+			if strings.HasPrefix(line, "Authority=") {
+				signer = strings.TrimPrefix(line, "Authority=")
+				break
+			}
+		}
+		return true, signer
+	}
+
+	return false, ""
+}
+
 // ScanFile gathers info about a single file
-func ScanFile(path string) (*FileInfo, error) {
-	info, err := os.Stat(path)
+func ScanFile(path string, checkCodesign bool) (*FileInfo, error) {
+	// Check for symlink first
+	linfo, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Only hash regular files
-	var hash string
-	if info.Mode().IsRegular() {
-		hash, err = HashFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to hash %s: %w", path, err)
+	fi := &FileInfo{
+		Path:    path,
+		Size:    linfo.Size(),
+		Mode:    linfo.Mode(),
+		ModTime: linfo.ModTime(),
+	}
+
+	// Handle symlinks
+	if linfo.Mode()&os.ModeSymlink != 0 {
+		fi.IsSymlink = true
+		dest, err := os.Readlink(path)
+		if err == nil {
+			fi.SymlinkDest = dest
+		}
+		// Hash the destination, not the link
+		realPath, err := filepath.EvalSymlinks(path)
+		if err == nil {
+			path = realPath
+			info, err := os.Stat(path)
+			if err == nil {
+				fi.Size = info.Size()
+			}
 		}
 	}
 
-	return &FileInfo{
-		Path:    path,
-		Hash:    hash,
-		Size:    info.Size(),
-		Mode:    info.Mode(),
-		ModTime: info.ModTime(),
-		// TODO: Get owner/group from syscall
-	}, nil
+	// Get owner/group (Unix)
+	if stat, ok := linfo.Sys().(*syscall.Stat_t); ok {
+		fi.Owner = stat.Uid
+		fi.Group = stat.Gid
+	}
+
+	// Only hash regular files
+	if linfo.Mode().IsRegular() || fi.IsSymlink {
+		hash, err := HashFile(path)
+		if err != nil {
+			// Non-fatal, some files may be unreadable
+			fi.Hash = "UNREADABLE"
+		} else {
+			fi.Hash = hash
+		}
+	}
+
+	// Check code signature for executables
+	if checkCodesign && isExecutable(path) {
+		fi.Codesigned, fi.SignedBy = CheckCodesign(path)
+	}
+
+	return fi, nil
+}
+
+// isExecutable checks if a file looks like an executable
+func isExecutable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+
+	// Check if it has execute permission
+	if info.Mode()&0111 != 0 {
+		return true
+	}
+
+	// Check for common executable extensions/patterns
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == "" || ext == ".app" || ext == ".dylib" || ext == ".so"
 }
 
 // ScanDirectory recursively scans a directory
-func (s *Scanner) ScanDirectory(root string) (map[string]*FileInfo, error) {
+func (s *Scanner) ScanDirectory(root string, checkCodesign bool) (map[string]*FileInfo, []string) {
 	files := make(map[string]*FileInfo)
+	var errors []string
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			// Log but continue on permission errors
 			if os.IsPermission(err) {
+				errors = append(errors, fmt.Sprintf("permission denied: %s", path))
 				return nil
 			}
-			return err
+			return nil // Skip other errors too
 		}
 
 		// Skip directories themselves, just scan files
@@ -166,9 +259,9 @@ func (s *Scanner) ScanDirectory(root string) (map[string]*FileInfo, error) {
 			return nil
 		}
 
-		fileInfo, err := ScanFile(path)
+		fileInfo, err := ScanFile(path, checkCodesign)
 		if err != nil {
-			// Log but continue
+			errors = append(errors, fmt.Sprintf("scan error: %s: %v", path, err))
 			return nil
 		}
 
@@ -176,77 +269,131 @@ func (s *Scanner) ScanDirectory(root string) (map[string]*FileInfo, error) {
 		return nil
 	})
 
-	return files, err
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("walk error: %s: %v", root, err))
+	}
+
+	return files, errors
 }
 
 // Scan performs a full scan of all indicators
-func (s *Scanner) Scan() (map[string]*FileInfo, error) {
-	allFiles := make(map[string]*FileInfo)
+func (s *Scanner) Scan() *ScanResult {
+	result := &ScanResult{
+		StartTime: time.Now(),
+		Files:     make(map[string]*FileInfo),
+	}
 
-	for _, indicator := range s.indicators {
-		info, err := os.Stat(indicator)
+	for _, ind := range s.indicators {
+		info, err := os.Stat(ind.Path)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", ind.Path, err))
 			continue
 		}
 
-		if info.IsDir() {
-			files, err := s.ScanDirectory(indicator)
-			if err != nil {
-				continue
-			}
+		// Check if we should verify codesign (only for binaries)
+		checkCodesign := ind.Category == "system_binaries" || ind.Category == "apps"
+
+		if info.IsDir() && ind.Recursive {
+			files, errs := s.ScanDirectory(ind.Path, checkCodesign)
+			result.Errors = append(result.Errors, errs...)
 			for path, fileInfo := range files {
-				allFiles[path] = fileInfo
+				result.Files[path] = fileInfo
 			}
-		} else {
-			fileInfo, err := ScanFile(indicator)
+		} else if !info.IsDir() {
+			fileInfo, err := ScanFile(ind.Path, checkCodesign)
 			if err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", ind.Path, err))
 				continue
 			}
-			allFiles[indicator] = fileInfo
+			result.Files[ind.Path] = fileInfo
+		} else if info.IsDir() && !ind.Recursive {
+			// Non-recursive directory - just list top level
+			entries, err := os.ReadDir(ind.Path)
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", ind.Path, err))
+				continue
+			}
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				fullPath := filepath.Join(ind.Path, entry.Name())
+				fileInfo, err := ScanFile(fullPath, checkCodesign)
+				if err != nil {
+					continue
+				}
+				result.Files[fullPath] = fileInfo
+			}
 		}
 	}
 
-	return allFiles, nil
+	result.EndTime = time.Now()
+	result.FilesScanned = len(result.Files)
+	return result
 }
 
 // Compare compares current scan to baseline and returns changes
 func Compare(baseline, current map[string]*FileInfo) []Change {
 	var changes []Change
 
+	// Build indicator lookup for severity classification
+	indLookup := make(map[string]indicators.Indicator)
+	for _, ind := range indicators.DefaultIndicators() {
+		indLookup[ind.Path] = ind
+	}
+
 	// Check for removed and modified files
 	for path, baseInfo := range baseline {
 		curInfo, exists := current[path]
 		if !exists {
 			changes = append(changes, Change{
-				Path:     path,
-				Type:     "removed",
-				Severity: classifySeverity(path, "removed"),
-				Before:   baseInfo,
+				Path:        path,
+				Type:        "removed",
+				Severity:    classifySeverity(path, "removed"),
+				Category:    classifyCategory(path),
+				Before:      baseInfo,
+				Details:     "file removed",
+				Description: fmt.Sprintf("File removed: %s", path),
 			})
 			continue
 		}
 
 		// Check for modifications
-		if baseInfo.Hash != curInfo.Hash {
+		if baseInfo.Hash != curInfo.Hash && baseInfo.Hash != "" && curInfo.Hash != "" {
 			changes = append(changes, Change{
-				Path:     path,
-				Type:     "modified",
-				Severity: classifySeverity(path, "modified"),
-				Before:   baseInfo,
-				After:    curInfo,
-				Details:  "hash changed",
+				Path:        path,
+				Type:        "modified",
+				Severity:    classifySeverity(path, "modified"),
+				Category:    classifyCategory(path),
+				Before:      baseInfo,
+				After:       curInfo,
+				Details:     "content changed (hash mismatch)",
+				Description: fmt.Sprintf("File modified: %s", path),
 			})
 		} else if baseInfo.Mode != curInfo.Mode {
 			changes = append(changes, Change{
-				Path:     path,
-				Type:     "modified",
-				Severity: SeverityWarning,
-				Before:   baseInfo,
-				After:    curInfo,
-				Details:  "permissions changed",
+				Path:        path,
+				Type:        "modified",
+				Severity:    SeverityWarning,
+				Category:    classifyCategory(path),
+				Before:      baseInfo,
+				After:       curInfo,
+				Details:     fmt.Sprintf("permissions changed: %o -> %o", baseInfo.Mode, curInfo.Mode),
+				Description: fmt.Sprintf("Permissions changed: %s", path),
+			})
+		} else if baseInfo.Owner != curInfo.Owner || baseInfo.Group != curInfo.Group {
+			changes = append(changes, Change{
+				Path:        path,
+				Type:        "modified",
+				Severity:    SeverityWarning,
+				Category:    classifyCategory(path),
+				Before:      baseInfo,
+				After:       curInfo,
+				Details:     fmt.Sprintf("ownership changed: %d:%d -> %d:%d", baseInfo.Owner, baseInfo.Group, curInfo.Owner, curInfo.Group),
+				Description: fmt.Sprintf("Ownership changed: %s", path),
 			})
 		}
 	}
@@ -255,10 +402,13 @@ func Compare(baseline, current map[string]*FileInfo) []Change {
 	for path, curInfo := range current {
 		if _, exists := baseline[path]; !exists {
 			changes = append(changes, Change{
-				Path:     path,
-				Type:     "added",
-				Severity: classifySeverity(path, "added"),
-				After:    curInfo,
+				Path:        path,
+				Type:        "added",
+				Severity:    classifySeverity(path, "added"),
+				Category:    classifyCategory(path),
+				After:       curInfo,
+				Details:     "new file detected",
+				Description: fmt.Sprintf("New file: %s", path),
 			})
 		}
 	}
@@ -268,40 +418,115 @@ func Compare(baseline, current map[string]*FileInfo) []Change {
 
 // classifySeverity determines severity based on path and change type
 func classifySeverity(path string, changeType string) Severity {
-	// LaunchDaemons and LaunchAgents are critical
-	if filepath.Dir(path) == "/Library/LaunchDaemons" ||
-		filepath.Dir(path) == "/Library/LaunchAgents" ||
-		filepath.Base(filepath.Dir(path)) == "LaunchAgents" {
+	// LaunchDaemons and LaunchAgents are always critical
+	if strings.Contains(path, "LaunchDaemons") || strings.Contains(path, "LaunchAgents") {
 		return SeverityCritical
 	}
 
 	// System binaries modifications are critical
-	if filepath.HasPrefix(path, "/usr/bin") ||
-		filepath.HasPrefix(path, "/usr/sbin") ||
-		filepath.HasPrefix(path, "/bin") ||
-		filepath.HasPrefix(path, "/sbin") {
-		if changeType == "modified" {
+	if strings.HasPrefix(path, "/usr/bin") ||
+		strings.HasPrefix(path, "/usr/sbin") ||
+		strings.HasPrefix(path, "/bin/") ||
+		strings.HasPrefix(path, "/sbin/") {
+		if changeType == "modified" || changeType == "removed" {
 			return SeverityCritical
 		}
 		return SeverityWarning
 	}
 
+	// Kernel extensions are critical
+	if strings.Contains(path, "/Extensions/") {
+		return SeverityCritical
+	}
+
 	// sudoers and PAM are critical
-	if filepath.HasPrefix(path, "/etc/sudoers") ||
-		filepath.HasPrefix(path, "/etc/pam.d") {
+	if strings.Contains(path, "sudoers") || strings.Contains(path, "pam.d") {
 		return SeverityCritical
 	}
 
 	// SSH authorized_keys changes are critical
-	if filepath.Base(path) == "authorized_keys" {
+	if strings.Contains(path, "authorized_keys") {
 		return SeverityCritical
 	}
 
+	// SSH config changes are warning
+	if strings.Contains(path, ".ssh/") || strings.Contains(path, "/ssh/") {
+		return SeverityWarning
+	}
+
+	// Shell configs are warning (could be injected)
+	if strings.HasSuffix(path, "rc") || strings.HasSuffix(path, "profile") {
+		return SeverityWarning
+	}
+
+	// Git hooks are warning
+	if strings.Contains(path, "hooks/") {
+		return SeverityWarning
+	}
+
 	// Browser extensions are warnings
-	if filepath.Contains(path, "Extensions") ||
-		filepath.Contains(path, "Profiles") {
+	if strings.Contains(path, "Extensions") {
+		return SeverityWarning
+	}
+
+	// AI agent configs are warnings
+	if strings.Contains(path, "claude") || strings.Contains(path, "cursor") {
 		return SeverityWarning
 	}
 
 	return SeverityInfo
+}
+
+// classifyCategory determines the category of a path
+func classifyCategory(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/usr/bin") || strings.HasPrefix(path, "/usr/sbin") ||
+		strings.HasPrefix(path, "/bin/") || strings.HasPrefix(path, "/sbin/"):
+		return "system_binaries"
+	case strings.Contains(path, "LaunchDaemons") || strings.Contains(path, "LaunchAgents"):
+		return "persistence"
+	case strings.Contains(path, "sudoers") || strings.Contains(path, "pam.d"):
+		return "privilege_escalation"
+	case strings.Contains(path, ".ssh/") || strings.Contains(path, "/ssh/"):
+		return "ssh"
+	case strings.HasSuffix(path, "rc") || strings.HasSuffix(path, "profile"):
+		return "shell_config"
+	case strings.Contains(path, "homebrew"):
+		return "package_managers"
+	case strings.Contains(path, "node_modules") || strings.Contains(path, "npm"):
+		return "npm"
+	case strings.Contains(path, ".git/") || strings.Contains(path, "gitconfig"):
+		return "git"
+	case strings.Contains(path, "cron") || strings.Contains(path, "periodic"):
+		return "cron"
+	case strings.Contains(path, "Chrome") || strings.Contains(path, "Safari") || strings.Contains(path, "Firefox"):
+		return "browser"
+	case strings.Contains(path, "claude") || strings.Contains(path, "cursor"):
+		return "ai_agents"
+	case strings.Contains(path, "/Extensions/"):
+		return "kernel"
+	default:
+		return "other"
+	}
+}
+
+// HasCriticalChanges returns true if any changes are critical severity
+func HasCriticalChanges(changes []Change) bool {
+	for _, c := range changes {
+		if c.Severity == SeverityCritical {
+			return true
+		}
+	}
+	return false
+}
+
+// FilterBySeverity returns changes at or above the given severity
+func FilterBySeverity(changes []Change, minSeverity Severity) []Change {
+	var filtered []Change
+	for _, c := range changes {
+		if c.Severity >= minSeverity {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
 }

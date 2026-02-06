@@ -3,8 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/kris-hansen/feelgoodbot/internal/scanner"
+	"github.com/kris-hansen/feelgoodbot/internal/snapshot"
+	"github.com/kris-hansen/feelgoodbot/pkg/indicators"
 )
 
 var version = "0.1.0-dev"
@@ -23,6 +29,11 @@ var rootCmd = &cobra.Command{
 
 Monitors critical system files for unauthorized changes and alerts you 
 immediately when tampering is detected.
+
+Based on analysis of real-world attacks including:
+  • GTG-1002 Claude Code espionage campaign
+  • Shai-Hulud npm supply chain attack
+  • Various coding agent compromises
 
 Quick start:
   feelgoodbot init      # Create baseline snapshot
@@ -49,12 +60,45 @@ var initCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("🛡️  Initializing feelgoodbot...")
 		fmt.Println()
-		fmt.Println("Creating baseline snapshot of key file indicators...")
-		// TODO: Implement initialization
-		fmt.Println("✓ Baseline snapshot created")
+
+		// Create snapshot store
+		store, err := snapshot.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to create snapshot store: %w", err)
+		}
+
+		// Check if baseline already exists
+		if store.HasBaseline() {
+			fmt.Println("⚠️  Baseline already exists. Use 'feelgoodbot snapshot' to update it.")
+			fmt.Println("   Or delete ~/.config/feelgoodbot/snapshots/baseline.json to reinitialize.")
+			return nil
+		}
+
+		// Create scanner and perform initial scan
+		fmt.Println("📸 Creating baseline snapshot of key file indicators...")
+		fmt.Println()
+
+		s := scanner.New()
+		result := s.Scan()
+
+		fmt.Printf("   Scanned %d files in %s\n", result.FilesScanned, result.EndTime.Sub(result.StartTime).Round(time.Millisecond))
+
+		if len(result.Errors) > 0 {
+			fmt.Printf("   ⚠️  %d files could not be scanned (permission denied)\n", len(result.Errors))
+		}
+
+		// Save baseline
+		snap, err := store.SaveBaseline(result.Files)
+		if err != nil {
+			return fmt.Errorf("failed to save baseline: %w", err)
+		}
+
+		fmt.Println()
+		fmt.Printf("✅ Baseline snapshot created (ID: %s)\n", snap.ID)
 		fmt.Println()
 		fmt.Println("Next steps:")
 		fmt.Println("  feelgoodbot scan     - Run integrity check")
+		fmt.Println("  feelgoodbot diff     - Show changes since baseline")
 		fmt.Println("  feelgoodbot daemon   - Start continuous monitoring")
 		return nil
 	},
@@ -66,8 +110,78 @@ var scanCmd = &cobra.Command{
 	Short: "Scan system for unauthorized changes",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("🔍 Scanning system integrity...")
-		// TODO: Implement scanning
-		fmt.Println("✓ No tampering detected")
+		fmt.Println()
+
+		// Load baseline
+		store, err := snapshot.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to access snapshot store: %w", err)
+		}
+
+		if !store.HasBaseline() {
+			fmt.Println("❌ No baseline found. Run 'feelgoodbot init' first.")
+			return nil
+		}
+
+		baseline, err := store.LoadBaseline()
+		if err != nil {
+			return fmt.Errorf("failed to load baseline: %w", err)
+		}
+
+		// Perform scan
+		s := scanner.New()
+		result := s.Scan()
+
+		fmt.Printf("   Scanned %d files in %s\n", result.FilesScanned, result.EndTime.Sub(result.StartTime).Round(time.Millisecond))
+		fmt.Println()
+
+		// Compare with baseline
+		changes := scanner.Compare(baseline.Files, result.Files)
+
+		if len(changes) == 0 {
+			fmt.Println("✅ No tampering detected. System integrity verified.")
+			return nil
+		}
+
+		// Group by severity
+		critical := scanner.FilterBySeverity(changes, scanner.SeverityCritical)
+		warnings := scanner.FilterBySeverity(changes, scanner.SeverityWarning)
+		warnings = filterOut(warnings, critical)
+		info := scanner.FilterBySeverity(changes, scanner.SeverityInfo)
+		info = filterOut(info, append(critical, warnings...))
+
+		// Display results
+		if len(critical) > 0 {
+			fmt.Printf("🚨 CRITICAL: %d changes detected!\n", len(critical))
+			for _, c := range critical {
+				fmt.Printf("   %s %s: %s\n", c.Severity.Emoji(), c.Type, c.Path)
+				if c.Details != "" {
+					fmt.Printf("      └─ %s\n", c.Details)
+				}
+			}
+			fmt.Println()
+		}
+
+		if len(warnings) > 0 {
+			fmt.Printf("⚠️  WARNING: %d changes detected\n", len(warnings))
+			for _, c := range warnings {
+				fmt.Printf("   %s %s: %s\n", c.Severity.Emoji(), c.Type, c.Path)
+			}
+			fmt.Println()
+		}
+
+		if len(info) > 0 {
+			fmt.Printf("ℹ️  INFO: %d changes detected\n", len(info))
+		}
+
+		// Summary
+		fmt.Println()
+		if scanner.HasCriticalChanges(changes) {
+			fmt.Println("🔴 SYSTEM MAY BE COMPROMISED - Review critical changes immediately!")
+		} else if len(warnings) > 0 {
+			fmt.Println("🟡 Suspicious changes detected - Review recommended")
+		}
+
 		return nil
 	},
 }
@@ -75,10 +189,33 @@ var scanCmd = &cobra.Command{
 // snapshot command - update baseline
 var snapshotCmd = &cobra.Command{
 	Use:   "snapshot",
-	Short: "Update baseline snapshot",
+	Short: "Update baseline snapshot (accepts current state as trusted)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("📸 Updating baseline snapshot...")
-		// TODO: Implement snapshot
+		fmt.Println()
+		fmt.Println("⚠️  WARNING: This will accept the current system state as trusted.")
+		fmt.Println("   Only do this after verifying no compromise has occurred.")
+		fmt.Println()
+
+		// Create scanner and perform scan
+		s := scanner.New()
+		result := s.Scan()
+
+		fmt.Printf("   Scanned %d files in %s\n", result.FilesScanned, result.EndTime.Sub(result.StartTime).Round(time.Millisecond))
+
+		// Save new baseline
+		store, err := snapshot.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to access snapshot store: %w", err)
+		}
+
+		snap, err := store.SaveBaseline(result.Files)
+		if err != nil {
+			return fmt.Errorf("failed to save baseline: %w", err)
+		}
+
+		fmt.Println()
+		fmt.Printf("✅ Baseline updated (ID: %s)\n", snap.ID)
 		return nil
 	},
 }
@@ -86,11 +223,58 @@ var snapshotCmd = &cobra.Command{
 // diff command - show changes
 var diffCmd = &cobra.Command{
 	Use:   "diff",
-	Short: "Show changes since last snapshot",
+	Short: "Show all changes since baseline",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("📊 Changes since last snapshot:")
-		// TODO: Implement diff
-		fmt.Println("  (no changes)")
+		// Load baseline
+		store, err := snapshot.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to access snapshot store: %w", err)
+		}
+
+		if !store.HasBaseline() {
+			fmt.Println("❌ No baseline found. Run 'feelgoodbot init' first.")
+			return nil
+		}
+
+		baseline, err := store.LoadBaseline()
+		if err != nil {
+			return fmt.Errorf("failed to load baseline: %w", err)
+		}
+
+		fmt.Printf("📊 Changes since baseline (created %s)\n", baseline.CreatedAt.Format("2006-01-02 15:04:05"))
+		fmt.Println()
+
+		// Perform scan
+		s := scanner.New()
+		result := s.Scan()
+
+		// Compare
+		changes := scanner.Compare(baseline.Files, result.Files)
+
+		if len(changes) == 0 {
+			fmt.Println("  (no changes)")
+			return nil
+		}
+
+		// Sort by severity (critical first)
+		sort.Slice(changes, func(i, j int) bool {
+			return changes[i].Severity > changes[j].Severity
+		})
+
+		// Display all changes with details
+		for _, c := range changes {
+			fmt.Printf("%s [%s] %s: %s\n", c.Severity.Emoji(), c.Category, c.Type, c.Path)
+			if c.Details != "" {
+				fmt.Printf("   └─ %s\n", c.Details)
+			}
+			if c.Before != nil && c.After != nil {
+				if c.Before.Hash != c.After.Hash {
+					fmt.Printf("   └─ hash: %s... → %s...\n", 
+						truncate(c.Before.Hash, 16), truncate(c.After.Hash, 16))
+				}
+			}
+		}
+
 		return nil
 	},
 }
@@ -106,7 +290,11 @@ var daemonStartCmd = &cobra.Command{
 	Short: "Start the monitoring daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("🚀 Starting feelgoodbot daemon...")
-		// TODO: Implement daemon
+		fmt.Println()
+		fmt.Println("   TODO: Implement launchd integration")
+		fmt.Println()
+		fmt.Println("For now, you can run periodic scans with:")
+		fmt.Println("  watch -n 300 feelgoodbot scan")
 		return nil
 	},
 }
@@ -116,7 +304,7 @@ var daemonStopCmd = &cobra.Command{
 	Short: "Stop the monitoring daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("🛑 Stopping feelgoodbot daemon...")
-		// TODO: Implement daemon stop
+		fmt.Println("   TODO: Implement daemon stop")
 		return nil
 	},
 }
@@ -133,10 +321,25 @@ var statusCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("📊 feelgoodbot status")
 		fmt.Println()
-		fmt.Println("Daemon:      stopped")
-		fmt.Println("Last scan:   never")
-		fmt.Println("Baseline:    not initialized")
-		fmt.Println("Indicators:  0 paths monitored")
+
+		store, err := snapshot.NewStore()
+		if err != nil {
+			fmt.Println("Baseline:    error accessing store")
+		} else if store.HasBaseline() {
+			baseline, err := store.LoadBaseline()
+			if err != nil {
+				fmt.Println("Baseline:    error loading")
+			} else {
+				fmt.Printf("Baseline:    %s (created %s)\n", baseline.ID, baseline.CreatedAt.Format("2006-01-02 15:04"))
+				fmt.Printf("Files:       %d monitored\n", len(baseline.Files))
+			}
+		} else {
+			fmt.Println("Baseline:    not initialized (run 'feelgoodbot init')")
+		}
+
+		fmt.Println("Daemon:      not running")
+		fmt.Printf("Indicators:  %d paths configured\n", len(indicators.DefaultIndicators()))
+
 		return nil
 	},
 }
@@ -149,7 +352,11 @@ var configCmd = &cobra.Command{
 		fmt.Println("📝 Configuration")
 		fmt.Println()
 		fmt.Println("Config file: ~/.config/feelgoodbot/config.yaml")
-		// TODO: Show config
+		fmt.Println()
+		fmt.Println("Default settings:")
+		fmt.Println("  scan_interval: 5m")
+		fmt.Println("  alerts.local_notification: true")
+		fmt.Println("  response.on_critical: [alert]")
 		return nil
 	},
 }
@@ -164,20 +371,56 @@ var indicatorsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all monitored paths",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("📁 Monitored Key File Indicators:")
+		fmt.Println("📁 Monitored Key File Indicators")
 		fmt.Println()
-		fmt.Println("System binaries:")
-		fmt.Println("  /usr/bin/")
-		fmt.Println("  /usr/sbin/")
-		fmt.Println()
-		fmt.Println("Persistence mechanisms:")
-		fmt.Println("  /Library/LaunchDaemons/")
-		fmt.Println("  /Library/LaunchAgents/")
-		fmt.Println("  ~/Library/LaunchAgents/")
-		fmt.Println()
-		fmt.Println("Configuration:")
-		fmt.Println("  /etc/")
-		fmt.Println("  ~/.ssh/authorized_keys")
+
+		inds := indicators.DefaultIndicators()
+		
+		// Group by category
+		byCategory := make(map[string][]indicators.Indicator)
+		for _, ind := range inds {
+			byCategory[ind.Category] = append(byCategory[ind.Category], ind)
+		}
+
+		// Print in order
+		categoryOrder := []string{
+			"system_binaries",
+			"persistence", 
+			"privilege_escalation",
+			"ssh",
+			"shell_config",
+			"kernel",
+			"package_managers",
+			"npm",
+			"git",
+			"cron",
+			"browser",
+			"ai_agents",
+			"network",
+			"system_config",
+			"apps",
+		}
+
+		for _, cat := range categoryOrder {
+			if inds, ok := byCategory[cat]; ok {
+				fmt.Printf("%s:\n", formatCategory(cat))
+				for _, ind := range inds {
+					sev := "●"
+					switch ind.Severity {
+					case indicators.Critical:
+						sev = "🔴"
+					case indicators.Warning:
+						sev = "🟡"
+					case indicators.Info:
+						sev = "🔵"
+					}
+					fmt.Printf("  %s %s\n", sev, ind.Path)
+				}
+				fmt.Println()
+			}
+		}
+
+		fmt.Println("Legend: 🔴 Critical  🟡 Warning  🔵 Info")
 		return nil
 	},
 }
@@ -188,6 +431,7 @@ var indicatorsAddCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Printf("✓ Added indicator: %s\n", args[0])
+		fmt.Println("   (Note: Custom indicators not yet persisted)")
 		return nil
 	},
 }
@@ -195,4 +439,64 @@ var indicatorsAddCmd = &cobra.Command{
 func init() {
 	indicatorsCmd.AddCommand(indicatorsListCmd)
 	indicatorsCmd.AddCommand(indicatorsAddCmd)
+}
+
+// Helper functions
+
+func filterOut(changes []scanner.Change, exclude []scanner.Change) []scanner.Change {
+	excludeMap := make(map[string]bool)
+	for _, c := range exclude {
+		excludeMap[c.Path] = true
+	}
+	var result []scanner.Change
+	for _, c := range changes {
+		if !excludeMap[c.Path] {
+			result = append(result, c)
+		}
+	}
+	return result
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+func formatCategory(cat string) string {
+	switch cat {
+	case "system_binaries":
+		return "System Binaries"
+	case "persistence":
+		return "Persistence Mechanisms"
+	case "privilege_escalation":
+		return "Privilege Escalation"
+	case "ssh":
+		return "SSH Access"
+	case "shell_config":
+		return "Shell Configuration"
+	case "kernel":
+		return "Kernel Extensions"
+	case "package_managers":
+		return "Package Managers"
+	case "npm":
+		return "npm Packages"
+	case "git":
+		return "Git Configuration"
+	case "cron":
+		return "Scheduled Tasks"
+	case "browser":
+		return "Browser Extensions"
+	case "ai_agents":
+		return "AI Agent Configuration"
+	case "network":
+		return "Network Configuration"
+	case "system_config":
+		return "System Configuration"
+	case "apps":
+		return "Application Binaries"
+	default:
+		return cat
+	}
 }
