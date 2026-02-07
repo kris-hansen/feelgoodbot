@@ -34,6 +34,7 @@ type AlertConfig struct {
 		Enabled bool   `mapstructure:"enabled"`
 		Webhook string `mapstructure:"webhook"`
 		Secret  string `mapstructure:"secret"`
+		To      string `mapstructure:"to"`
 	} `mapstructure:"clawdbot"`
 
 	Slack struct {

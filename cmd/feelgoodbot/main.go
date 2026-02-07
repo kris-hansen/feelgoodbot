@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kris-hansen/feelgoodbot/internal/config"
 	"github.com/kris-hansen/feelgoodbot/internal/daemon"
 	"github.com/kris-hansen/feelgoodbot/internal/scanner"
 	"github.com/kris-hansen/feelgoodbot/internal/snapshot"
@@ -449,8 +450,15 @@ var daemonRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run daemon in foreground (used by launchd)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Parse interval
-		interval := 5 * time.Minute
+		// Load config file
+		fileCfg, err := config.Load()
+		if err != nil {
+			// Non-fatal - use defaults
+			fileCfg = config.DefaultConfig()
+		}
+
+		// Parse interval from CLI or config
+		interval := fileCfg.ScanInterval
 		if daemonInterval != "" {
 			parsed, err := time.ParseDuration(daemonInterval)
 			if err != nil {
@@ -459,10 +467,22 @@ var daemonRunCmd = &cobra.Command{
 			interval = parsed
 		}
 
-		// Build config
+		// Build daemon config
 		cfg := daemon.DefaultConfig()
 		cfg.ScanInterval = interval
 
+		// Map config file alerts to daemon alert config
+		if fileCfg.Alerts.Clawdbot.Enabled {
+			cfg.AlertConfig.ClawdbotURL = fileCfg.Alerts.Clawdbot.Webhook
+			cfg.AlertConfig.ClawdbotSecret = fileCfg.Alerts.Clawdbot.Secret
+			cfg.AlertConfig.ClawdbotTo = fileCfg.Alerts.Clawdbot.To
+		}
+		if fileCfg.Alerts.Slack.Enabled {
+			cfg.AlertConfig.SlackURL = fileCfg.Alerts.Slack.WebhookURL
+		}
+		cfg.AlertConfig.LocalNotify = fileCfg.Alerts.LocalNotification
+
+		// CLI flag overrides config file
 		if daemonClawdbot != "" {
 			cfg.AlertConfig.ClawdbotURL = daemonClawdbot
 		}

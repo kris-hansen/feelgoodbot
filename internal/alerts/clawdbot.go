@@ -14,12 +14,10 @@ import (
 	"github.com/kris-hansen/feelgoodbot/internal/scanner"
 )
 
-// ClawdbotAgentPayload is the webhook payload for Clawdbot's /hooks/agent endpoint
-type ClawdbotAgentPayload struct {
-	Message string `json:"message"`           // The alert message
-	Name    string `json:"name"`              // Hook name (e.g., "feelgoodbot")
-	Deliver bool   `json:"deliver"`           // Whether to deliver to chat
-	Channel string `json:"channel,omitempty"` // Target channel (telegram, last, etc.)
+// ClawdbotWakePayload is the webhook payload for Clawdbot's /hooks/wake endpoint
+type ClawdbotWakePayload struct {
+	Text string `json:"text"` // The alert text
+	Mode string `json:"mode"` // "now" or "next-heartbeat"
 }
 
 // Alert represents a security alert
@@ -35,6 +33,7 @@ type Alert struct {
 type Config struct {
 	ClawdbotURL    string `yaml:"clawdbot_url"`
 	ClawdbotSecret string `yaml:"clawdbot_secret"`
+	ClawdbotTo     string `yaml:"clawdbot_to"`
 	SlackURL       string `yaml:"slack_url"`
 	LocalNotify    bool   `yaml:"local_notify"`
 }
@@ -43,6 +42,7 @@ type Config struct {
 type Alerter struct {
 	clawdbotURL    string
 	clawdbotSecret string
+	clawdbotTo     string
 	slackURL       string
 	localNotify    bool
 }
@@ -52,6 +52,7 @@ func NewAlerter(cfg Config) *Alerter {
 	return &Alerter{
 		clawdbotURL:    cfg.ClawdbotURL,
 		clawdbotSecret: cfg.ClawdbotSecret,
+		clawdbotTo:     cfg.ClawdbotTo,
 		slackURL:       cfg.SlackURL,
 		localNotify:    cfg.LocalNotify,
 	}
@@ -90,11 +91,9 @@ func (a *Alerter) sendClawdbot(alert Alert) error {
 	// Build the alert message
 	message := formatAlertMessage(alert)
 
-	payload := ClawdbotAgentPayload{
-		Message: message,
-		Name:    "feelgoodbot",
-		Deliver: true,
-		Channel: "last", // Use last active channel
+	payload := ClawdbotWakePayload{
+		Text: message,
+		Mode: "now", // Trigger immediate heartbeat
 	}
 
 	data, err := json.Marshal(payload)
