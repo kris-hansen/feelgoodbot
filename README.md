@@ -8,7 +8,7 @@
 
 Traditional antivirus tries to *prevent* malware. **feelgoodbot** focuses on *detection* — continuously monitoring your system for signs of compromise and alerting you immediately when something changes.
 
-The reality: determined attackers will get in. The question is how fast you detect it.
+The reality: determined attackers might get in. The question is how fast you detect it, and what will you do about it.
 
 ## How It Works
 
@@ -170,7 +170,7 @@ feelgoodbot uses Clawdbot's `/hooks/agent` endpoint:
 
 ### What Happens
 
-When an alert fires, Clawdbot:
+When an alert fires, Clawdbot/Openclaw:
 1. Receives the webhook and runs an isolated agent session
 2. Sends you a message on your last active channel (Telegram, Signal, etc.)
 3. Can execute follow-up actions based on the alert
