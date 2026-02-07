@@ -93,7 +93,7 @@ func TestFormatAlertMessage(t *testing.T) {
 }
 
 func TestSendClawdbot(t *testing.T) {
-	var receivedPayload ClawdbotAgentPayload
+	var receivedPayload ClawdbotWakePayload
 	var receivedToken string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,17 +131,14 @@ func TestSendClawdbot(t *testing.T) {
 	}
 
 	// Check payload structure
-	if receivedPayload.Name != "feelgoodbot" {
-		t.Errorf("expected name 'feelgoodbot', got %q", receivedPayload.Name)
+	if receivedPayload.Mode != "now" {
+		t.Errorf("expected mode 'now', got %q", receivedPayload.Mode)
 	}
-	if !receivedPayload.Deliver {
-		t.Error("expected deliver=true")
+	if !strings.Contains(receivedPayload.Text, "CRITICAL") {
+		t.Error("text should contain CRITICAL")
 	}
-	if receivedPayload.Channel != "last" {
-		t.Errorf("expected channel 'last', got %q", receivedPayload.Channel)
-	}
-	if !strings.Contains(receivedPayload.Message, "CRITICAL") {
-		t.Error("message should contain CRITICAL")
+	if !strings.Contains(receivedPayload.Text, "test.local") {
+		t.Error("text should contain hostname")
 	}
 }
 
