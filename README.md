@@ -32,6 +32,22 @@ feelgoodbot monitors critical macOS locations:
 - SSH authorized_keys
 - Sudoers and PAM modules
 
+### AI Agent Protection 🤖
+
+feelgoodbot protects AI agents from compromise:
+
+| Path | Threat | Severity |
+|------|--------|----------|
+| `~/clawd/SOUL.md` | Agent personality hijack | **CRITICAL** |
+| `~/clawd/AGENTS.md` | Instruction injection | **CRITICAL** |
+| `~/.config/clawdbot/config.yaml` | API key theft | **CRITICAL** |
+| `~/clawd/skills/` | Malicious skill injection | **CRITICAL** |
+| `~/clawd/MEMORY.md` | Memory poisoning | WARNING |
+| `~/.config/claude/` | MCP server tampering | WARNING |
+| `~/.cursor/` | Cursor AI config | WARNING |
+
+**Why this matters:** A compromised AI agent could exfiltrate sensitive data, execute malicious commands, or manipulate its own behavior to serve an attacker.
+
 ## Installation
 
 ```bash
@@ -73,6 +89,20 @@ indicators:
   etc_files: true
   custom_paths:
     - /opt/homebrew/bin
+  
+  # Custom indicators with full options
+  custom:
+    - path: ~/my-project/config.yaml
+      description: My project config
+      severity: critical
+      recursive: false
+      category: custom
+    
+    - path: ~/my-agent/workspace
+      description: Agent workspace files
+      severity: warning
+      recursive: true
+      category: ai_agents
 
 # Scan frequency (daemon mode)
 scan_interval: 5m
@@ -104,6 +134,46 @@ response:
   on_info:
     - log
 ```
+
+## Custom Indicators
+
+Define custom paths to monitor with full control over severity and behavior:
+
+```yaml
+# ~/.config/feelgoodbot/config.yaml
+indicators:
+  custom:
+    # Monitor a specific file
+    - path: ~/my-secrets/vault.db
+      description: Secret vault database
+      severity: critical    # critical, warning, or info
+      recursive: false
+      category: custom
+    
+    # Monitor a directory (top-level only)
+    - path: ~/my-agent/plugins
+      description: Agent plugins directory
+      severity: critical
+      recursive: false      # Only alert on new top-level files
+      category: ai_agents
+    
+    # Monitor a directory recursively
+    - path: ~/sensitive-data
+      description: Sensitive data folder
+      severity: warning
+      recursive: true       # Scan all subdirectories
+      category: custom
+```
+
+### Custom Indicator Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `path` | string | Path to monitor. Supports `~` for home directory. |
+| `description` | string | Human-readable description for alerts. |
+| `severity` | string | `critical`, `warning`, or `info` |
+| `recursive` | bool | If true, scan subdirectories. If false, only top-level. |
+| `category` | string | Category for grouping (e.g., `ai_agents`, `custom`) |
 
 ## Commands
 

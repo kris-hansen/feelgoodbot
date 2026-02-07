@@ -4,6 +4,7 @@ package indicators
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Severity of a monitored path
@@ -15,13 +16,67 @@ const (
 	Critical
 )
 
+// String returns the string representation of severity
+func (s Severity) String() string {
+	switch s {
+	case Info:
+		return "info"
+	case Warning:
+		return "warning"
+	case Critical:
+		return "critical"
+	default:
+		return "unknown"
+	}
+}
+
+// ParseSeverity converts a string to Severity
+func ParseSeverity(s string) Severity {
+	switch strings.ToLower(s) {
+	case "critical":
+		return Critical
+	case "warning":
+		return Warning
+	default:
+		return Info
+	}
+}
+
 // Indicator represents a path to monitor
 type Indicator struct {
-	Path        string   `json:"path"`
-	Description string   `json:"description"`
-	Severity    Severity `json:"severity"`
-	Recursive   bool     `json:"recursive"`
-	Category    string   `json:"category"`
+	Path        string   `json:"path" yaml:"path"`
+	Description string   `json:"description" yaml:"description"`
+	Severity    Severity `json:"severity" yaml:"severity"`
+	Recursive   bool     `json:"recursive" yaml:"recursive"`
+	Category    string   `json:"category" yaml:"category"`
+}
+
+// CustomIndicator represents a user-defined indicator from config
+// Uses string severity for YAML compatibility
+type CustomIndicator struct {
+	Path        string `yaml:"path"`
+	Description string `yaml:"description"`
+	Severity    string `yaml:"severity"` // "info", "warning", "critical"
+	Recursive   bool   `yaml:"recursive"`
+	Category    string `yaml:"category"`
+}
+
+// ToIndicator converts a CustomIndicator to an Indicator
+func (c CustomIndicator) ToIndicator() Indicator {
+	// Expand ~ to home directory
+	path := c.Path
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[2:])
+	}
+
+	return Indicator{
+		Path:        path,
+		Description: c.Description,
+		Severity:    ParseSeverity(c.Severity),
+		Recursive:   c.Recursive,
+		Category:    c.Category,
+	}
 }
 
 // DefaultIndicators returns the comprehensive set of macOS paths to monitor
@@ -315,7 +370,7 @@ func DefaultIndicators() []Indicator {
 		},
 
 		// ============================================================
-		// WARNING: MCP Configuration
+		// WARNING: AI Agent Configurations
 		// AI agent tool access - GTG-1002 attack vector
 		// ============================================================
 		{
@@ -337,6 +392,75 @@ func DefaultIndicators() []Indicator {
 			Description: "Cursor AI configuration",
 			Severity:    Warning,
 			Recursive:   true,
+			Category:    "ai_agents",
+		},
+
+		// ============================================================
+		// CRITICAL: Clawdbot/OpenClaw Agent Files
+		// Agent personality, memory, and configuration
+		// Compromise = agent exfiltrates data or behaves maliciously
+		// ============================================================
+		{
+			Path:        filepath.Join(home, "clawd/SOUL.md"),
+			Description: "Clawdbot agent personality - hijack = malicious behavior",
+			Severity:    Critical,
+			Recursive:   false,
+			Category:    "ai_agents",
+		},
+		{
+			Path:        filepath.Join(home, "clawd/AGENTS.md"),
+			Description: "Clawdbot workspace rules - injection = behavior change",
+			Severity:    Critical,
+			Recursive:   false,
+			Category:    "ai_agents",
+		},
+		{
+			Path:        filepath.Join(home, ".config/clawdbot/config.yaml"),
+			Description: "Clawdbot config (API keys, secrets)",
+			Severity:    Critical,
+			Recursive:   false,
+			Category:    "ai_agents",
+		},
+		{
+			Path:        filepath.Join(home, "clawd/skills"),
+			Description: "Clawdbot custom skills - malicious skill injection",
+			Severity:    Critical,
+			Recursive:   false, // Top-level to detect new skills
+			Category:    "ai_agents",
+		},
+		{
+			Path:        filepath.Join(home, "clawd/HEARTBEAT.md"),
+			Description: "Clawdbot heartbeat instructions",
+			Severity:    Warning,
+			Recursive:   false,
+			Category:    "ai_agents",
+		},
+		{
+			Path:        filepath.Join(home, "clawd/MEMORY.md"),
+			Description: "Clawdbot long-term memory",
+			Severity:    Warning,
+			Recursive:   false,
+			Category:    "ai_agents",
+		},
+		{
+			Path:        filepath.Join(home, "clawd/USER.md"),
+			Description: "Clawdbot user profile (PII)",
+			Severity:    Warning,
+			Recursive:   false,
+			Category:    "ai_agents",
+		},
+		{
+			Path:        filepath.Join(home, "clawd/IDENTITY.md"),
+			Description: "Clawdbot agent identity",
+			Severity:    Warning,
+			Recursive:   false,
+			Category:    "ai_agents",
+		},
+		{
+			Path:        "/opt/homebrew/lib/node_modules/clawdbot",
+			Description: "Clawdbot core installation",
+			Severity:    Warning,
+			Recursive:   false, // Top-level to detect tampering
 			Category:    "ai_agents",
 		},
 
@@ -367,7 +491,7 @@ func DefaultIndicators() []Indicator {
 		},
 
 		// ============================================================
-		// INFO: Kernel Extensions
+		// CRITICAL: Kernel Extensions
 		// Rootkit territory
 		// ============================================================
 		{
@@ -386,7 +510,7 @@ func DefaultIndicators() []Indicator {
 		},
 
 		// ============================================================
-		// WARNING: Application Bundles (selected)
+		// CRITICAL: Application Bundles (selected)
 		// ============================================================
 		{
 			Path:        "/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
@@ -420,6 +544,23 @@ func GetCriticalIndicators() []Indicator {
 	return result
 }
 
+// MergeIndicators combines default indicators with custom ones
+// Custom indicators override defaults if paths match
+func MergeIndicators(defaults []Indicator, custom []CustomIndicator) []Indicator {
+	result := make([]Indicator, len(defaults))
+	copy(result, defaults)
+
+	// Convert and append custom indicators
+	for _, c := range custom {
+		ind := c.ToIndicator()
+		if ind.Path != "" {
+			result = append(result, ind)
+		}
+	}
+
+	return result
+}
+
 // Categories returns all unique categories
 func Categories() []string {
 	return []string{
@@ -438,5 +579,6 @@ func Categories() []string {
 		"system_config",
 		"kernel",
 		"apps",
+		"custom",
 	}
 }

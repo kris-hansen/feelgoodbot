@@ -469,7 +469,19 @@ func classifySeverity(path string, changeType string) Severity {
 		return SeverityWarning
 	}
 
-	// AI agent configs are warnings
+	// AI agent configs - Clawdbot core files are critical
+	if strings.Contains(path, "clawdbot") || strings.Contains(path, "/clawd/") {
+		// Critical: personality, config, skills
+		if strings.Contains(path, "SOUL.md") ||
+			strings.Contains(path, "AGENTS.md") ||
+			strings.Contains(path, "config.yaml") ||
+			strings.Contains(path, "/skills/") {
+			return SeverityCritical
+		}
+		return SeverityWarning
+	}
+
+	// Other AI agent configs are warnings
 	if strings.Contains(path, "claude") || strings.Contains(path, "cursor") {
 		return SeverityWarning
 	}
@@ -501,7 +513,8 @@ func classifyCategory(path string) string {
 		return "cron"
 	case strings.Contains(path, "Chrome") || strings.Contains(path, "Safari") || strings.Contains(path, "Firefox"):
 		return "browser"
-	case strings.Contains(path, "claude") || strings.Contains(path, "cursor"):
+	case strings.Contains(path, "claude") || strings.Contains(path, "cursor") ||
+		strings.Contains(path, "clawdbot") || strings.Contains(path, "/clawd/"):
 		return "ai_agents"
 	case strings.Contains(path, "/Extensions/"):
 		return "kernel"
