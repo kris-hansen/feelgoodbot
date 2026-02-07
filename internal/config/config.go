@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/kris-hansen/feelgoodbot/pkg/indicators"
 	"github.com/spf13/viper"
 )
 
@@ -26,6 +27,16 @@ type IndicatorConfig struct {
 	SSHKeys           bool     `mapstructure:"ssh_keys"`
 	EtcFiles          bool     `mapstructure:"etc_files"`
 	CustomPaths       []string `mapstructure:"custom_paths"`
+
+	// Custom allows full indicator definitions with severity, category, etc.
+	// Example in config.yaml:
+	//   custom:
+	//     - path: ~/my-agent/config.yaml
+	//       description: My agent config
+	//       severity: critical
+	//       recursive: false
+	//       category: ai_agents
+	Custom []indicators.CustomIndicator `mapstructure:"custom"`
 }
 
 // AlertConfig configures alert destinations
@@ -63,6 +74,7 @@ func DefaultConfig() *Config {
 			SSHKeys:           true,
 			EtcFiles:          true,
 			CustomPaths:       []string{},
+			Custom:            []indicators.CustomIndicator{},
 		},
 		ScanInterval: 5 * time.Minute,
 		Alerts: AlertConfig{
@@ -74,6 +86,14 @@ func DefaultConfig() *Config {
 			OnInfo:     []string{"log"},
 		},
 	}
+}
+
+// GetAllIndicators returns default indicators merged with custom ones
+func (c *Config) GetAllIndicators() []indicators.Indicator {
+	defaults := indicators.DefaultIndicators()
+
+	// Merge with custom indicators from config
+	return indicators.MergeIndicators(defaults, c.Indicators.Custom)
 }
 
 // Load reads configuration from file

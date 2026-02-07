@@ -173,3 +173,170 @@ func TestSeverityConstants(t *testing.T) {
 		t.Error("Warning should be less than Critical")
 	}
 }
+
+func TestParseSeverity(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected Severity
+	}{
+		{"critical", Critical},
+		{"CRITICAL", Critical},
+		{"Critical", Critical},
+		{"warning", Warning},
+		{"WARNING", Warning},
+		{"info", Info},
+		{"INFO", Info},
+		{"unknown", Info}, // defaults to Info
+		{"", Info},
+	}
+
+	for _, tc := range tests {
+		result := ParseSeverity(tc.input)
+		if result != tc.expected {
+			t.Errorf("ParseSeverity(%q) = %d, want %d", tc.input, result, tc.expected)
+		}
+	}
+}
+
+func TestSeverityString(t *testing.T) {
+	tests := []struct {
+		sev      Severity
+		expected string
+	}{
+		{Critical, "critical"},
+		{Warning, "warning"},
+		{Info, "info"},
+	}
+
+	for _, tc := range tests {
+		result := tc.sev.String()
+		if result != tc.expected {
+			t.Errorf("Severity(%d).String() = %q, want %q", tc.sev, result, tc.expected)
+		}
+	}
+}
+
+func TestCustomIndicatorToIndicator(t *testing.T) {
+	custom := CustomIndicator{
+		Path:        "~/test/path",
+		Description: "Test description",
+		Severity:    "critical",
+		Recursive:   true,
+		Category:    "custom",
+	}
+
+	ind := custom.ToIndicator()
+
+	if !strings.HasSuffix(ind.Path, "/test/path") {
+		t.Errorf("expected path to end with /test/path, got %s", ind.Path)
+	}
+	if ind.Description != "Test description" {
+		t.Errorf("expected description 'Test description', got %s", ind.Description)
+	}
+	if ind.Severity != Critical {
+		t.Errorf("expected severity Critical, got %d", ind.Severity)
+	}
+	if !ind.Recursive {
+		t.Error("expected recursive to be true")
+	}
+	if ind.Category != "custom" {
+		t.Errorf("expected category 'custom', got %s", ind.Category)
+	}
+}
+
+func TestCustomIndicatorExpandsHome(t *testing.T) {
+	home, _ := os.UserHomeDir()
+
+	custom := CustomIndicator{
+		Path: "~/test",
+	}
+
+	ind := custom.ToIndicator()
+
+	if !strings.HasPrefix(ind.Path, home) {
+		t.Errorf("expected path to start with %s, got %s", home, ind.Path)
+	}
+}
+
+func TestMergeIndicators(t *testing.T) {
+	defaults := []Indicator{
+		{Path: "/default/path1", Description: "Default 1"},
+		{Path: "/default/path2", Description: "Default 2"},
+	}
+
+	customs := []CustomIndicator{
+		{Path: "/custom/path1", Description: "Custom 1", Severity: "critical"},
+	}
+
+	merged := MergeIndicators(defaults, customs)
+
+	if len(merged) != 3 {
+		t.Errorf("expected 3 indicators, got %d", len(merged))
+	}
+}
+
+func TestClawdbotIndicatorsExist(t *testing.T) {
+	indicators := DefaultIndicators()
+
+	// Check that Clawdbot indicators exist
+	foundSoul := false
+	foundAgents := false
+	foundConfig := false
+	foundSkills := false
+
+	for _, ind := range indicators {
+		if strings.Contains(ind.Path, "clawd/SOUL.md") {
+			foundSoul = true
+			if ind.Severity != Critical {
+				t.Error("SOUL.md should be Critical severity")
+			}
+		}
+		if strings.Contains(ind.Path, "clawd/AGENTS.md") {
+			foundAgents = true
+			if ind.Severity != Critical {
+				t.Error("AGENTS.md should be Critical severity")
+			}
+		}
+		if strings.Contains(ind.Path, "clawdbot/config.yaml") {
+			foundConfig = true
+			if ind.Severity != Critical {
+				t.Error("clawdbot config.yaml should be Critical severity")
+			}
+		}
+		if strings.Contains(ind.Path, "clawd/skills") {
+			foundSkills = true
+			if ind.Severity != Critical {
+				t.Error("clawd/skills should be Critical severity")
+			}
+		}
+	}
+
+	if !foundSoul {
+		t.Error("missing Clawdbot SOUL.md indicator")
+	}
+	if !foundAgents {
+		t.Error("missing Clawdbot AGENTS.md indicator")
+	}
+	if !foundConfig {
+		t.Error("missing Clawdbot config.yaml indicator")
+	}
+	if !foundSkills {
+		t.Error("missing Clawdbot skills indicator")
+	}
+}
+
+func TestAIAgentsCategoryIncludesClawdbot(t *testing.T) {
+	aiAgents := GetIndicatorsByCategory("ai_agents")
+
+	foundClawdbot := false
+	for _, ind := range aiAgents {
+		if strings.Contains(ind.Path, "clawd") || strings.Contains(ind.Path, "clawdbot") {
+			foundClawdbot = true
+			break
+		}
+	}
+
+	if !foundClawdbot {
+		t.Error("ai_agents category should include Clawdbot indicators")
+	}
+}
