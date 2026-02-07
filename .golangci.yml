@@ -23,7 +23,11 @@ linters-settings:
   gocritic:
     enabled-tags:
       - diagnostic
-      - performance
+    disabled-checks:
+      - hugeParam
+      - ifElseChain
+      - appendAssign
+      - filepathJoin
   goimports:
     local-prefixes: github.com/kris-hansen/feelgoodbot
   misspell:

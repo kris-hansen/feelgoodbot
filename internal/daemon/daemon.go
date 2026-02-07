@@ -116,7 +116,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.logger.Println("Received shutdown signal")
 			return nil
 		case <-ctx.Done():
-			d.logger.Println("Context cancelled")
+			d.logger.Println("Context canceled")
 			return nil
 		case <-d.stopChan:
 			d.logger.Println("Stop requested")

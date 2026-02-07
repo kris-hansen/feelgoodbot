@@ -2,7 +2,7 @@ package indicators
 
 import (
 	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -60,7 +60,7 @@ func TestDefaultIndicatorsExpandHome(t *testing.T) {
 		if len(ind.Path) > 0 && ind.Path[0] != '/' && ind.Path[0] != '~' {
 			continue // relative path
 		}
-		if filepath.HasPrefix(ind.Path, home) {
+		if strings.HasPrefix(ind.Path, home) {
 			foundHomePath = true
 			break
 		}
