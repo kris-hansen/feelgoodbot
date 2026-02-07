@@ -109,7 +109,7 @@ func TestStoreIntegrityCheck(t *testing.T) {
 	baselinePath := filepath.Join(tmpDir, "baseline.json")
 	data, _ := os.ReadFile(baselinePath)
 	tampered := append(data[:len(data)-10], []byte(`"tampered"}`)...)
-	os.WriteFile(baselinePath, tampered, 0600)
+	_ = os.WriteFile(baselinePath, tampered, 0600)
 
 	// Load should fail integrity check
 	_, err = store.LoadBaseline()

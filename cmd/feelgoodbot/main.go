@@ -287,9 +287,8 @@ var diffCmd = &cobra.Command{
 
 // Daemon command flags
 var (
-	daemonInterval   string
-	daemonClawdbot   string
-	daemonForeground bool
+	daemonInterval string
+	daemonClawdbot string
 )
 
 // daemon command - background monitoring
@@ -366,7 +365,7 @@ var daemonUninstallCmd = &cobra.Command{
 		status := daemon.GetStatus("")
 		if status.Running {
 			fmt.Println("   Stopping daemon...")
-			exec.Command("launchctl", "unload", daemon.LaunchdPlistPath()).Run()
+			_ = exec.Command("launchctl", "unload", daemon.LaunchdPlistPath()).Run()
 		}
 
 		if err := daemon.Uninstall(); err != nil {
@@ -433,11 +432,11 @@ var daemonStopCmd = &cobra.Command{
 		plistPath := daemon.LaunchdPlistPath()
 		if _, err := os.Stat(plistPath); err == nil {
 			// Unload via launchctl
-			exec.Command("launchctl", "unload", plistPath).Run()
+			_ = exec.Command("launchctl", "unload", plistPath).Run()
 		} else {
 			// Kill directly
 			if p, err := os.FindProcess(status.PID); err == nil {
-				p.Signal(os.Interrupt)
+				_ = p.Signal(os.Interrupt)
 			}
 		}
 
@@ -522,7 +521,7 @@ var daemonStatusCmd = &cobra.Command{
 
 		// Check logs
 		home, _ := os.UserHomeDir()
-		logPath := filepath.Join(home, ".config/feelgoodbot/daemon.log")
+		logPath := filepath.Join(home, ".config", "feelgoodbot", "daemon.log")
 		if info, err := os.Stat(logPath); err == nil {
 			fmt.Printf("   Log:     %s (%.1f KB)\n", logPath, float64(info.Size())/1024)
 		}

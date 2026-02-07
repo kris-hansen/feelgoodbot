@@ -285,7 +285,7 @@ func DisconnectNetwork() error {
 	// Disable Wi-Fi
 	if err := exec.Command("networksetup", "-setairportpower", "en0", "off").Run(); err != nil {
 		// Try alternate interface
-		exec.Command("networksetup", "-setairportpower", "en1", "off").Run()
+		_ = exec.Command("networksetup", "-setairportpower", "en1", "off").Run()
 	}
 	return nil
 }

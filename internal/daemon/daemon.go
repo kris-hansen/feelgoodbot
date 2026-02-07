@@ -30,8 +30,8 @@ func DefaultConfig() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
 		ScanInterval: 5 * time.Minute,
-		LogFile:      filepath.Join(home, ".config/feelgoodbot/daemon.log"),
-		PidFile:      filepath.Join(home, ".config/feelgoodbot/daemon.pid"),
+		LogFile:      filepath.Join(home, ".config", "feelgoodbot", "daemon.log"),
+		PidFile:      filepath.Join(home, ".config", "feelgoodbot", "daemon.pid"),
 		AlertConfig: alerts.Config{
 			LocalNotify: true,
 		},
@@ -240,7 +240,7 @@ type Status struct {
 func GetStatus(pidFile string) Status {
 	if pidFile == "" {
 		home, _ := os.UserHomeDir()
-		pidFile = filepath.Join(home, ".config/feelgoodbot/daemon.pid")
+		pidFile = filepath.Join(home, ".config", "feelgoodbot", "daemon.pid")
 	}
 
 	data, err := os.ReadFile(pidFile)
@@ -278,8 +278,8 @@ func LaunchdPlist(binaryPath string, scanInterval time.Duration) string {
 	}
 
 	home, _ := os.UserHomeDir()
-	logPath := filepath.Join(home, ".config/feelgoodbot/daemon.log")
-	errPath := filepath.Join(home, ".config/feelgoodbot/daemon.err")
+	logPath := filepath.Join(home, ".config", "feelgoodbot", "daemon.log")
+	errPath := filepath.Join(home, ".config", "feelgoodbot", "daemon.err")
 
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -325,7 +325,7 @@ func LaunchdPlist(binaryPath string, scanInterval time.Duration) string {
 // LaunchdPlistPath returns the path to the launchd plist
 func LaunchdPlistPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library/LaunchAgents/com.feelgoodbot.daemon.plist")
+	return filepath.Join(home, "Library", "LaunchAgents", "com.feelgoodbot.daemon.plist")
 }
 
 // Install installs the daemon as a launchd service
@@ -360,7 +360,7 @@ func Uninstall() error {
 // WriteLastScan writes the last scan result to a status file
 func WriteLastScan(result *scanner.ScanResult, changes []scanner.Change) error {
 	home, _ := os.UserHomeDir()
-	statusFile := filepath.Join(home, ".config/feelgoodbot/last_scan.json")
+	statusFile := filepath.Join(home, ".config", "feelgoodbot", "last_scan.json")
 
 	status := map[string]interface{}{
 		"timestamp":     result.EndTime,
