@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/kris-hansen/feelgoodbot/pkg/indicators"
 	"github.com/spf13/viper"
+
+	"github.com/kris-hansen/feelgoodbot/pkg/indicators"
 )
 
 // Config represents the application configuration
