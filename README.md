@@ -1,4 +1,5 @@
-# feelgoodbot 🛡️
+# FeelGoodBot 🛡️
+## Pronounced "Feel good, bot"
 
 **Malware Detection for macOS** — Know when you've been compromised.
 
