@@ -81,7 +81,7 @@ scan_interval: 5m
 alerts:
   clawdbot:
     enabled: true
-    webhook: "http://127.0.0.1:18789/hooks/agent"
+    webhook: "http://127.0.0.1:18789/hooks/wake"
     secret: "your-clawdbot-hooks-token"
   
   slack:
@@ -145,22 +145,20 @@ Enable webhook ingress in your Clawdbot config (`~/.clawdbot/clawdbot.json`):
 alerts:
   clawdbot:
     enabled: true
-    webhook: "http://127.0.0.1:18789/hooks/agent"  # Local Clawdbot
-    secret: "your-shared-secret"                    # Matches hooks.token
+    webhook: "http://127.0.0.1:18789/hooks/wake"  # Local Clawdbot
+    secret: "your-shared-secret"                   # Matches hooks.token
 ```
 
 For remote Clawdbot, change the webhook URL to your server's address.
 
 ### Webhook Payload
 
-feelgoodbot uses Clawdbot's `/hooks/agent` endpoint:
+feelgoodbot uses Clawdbot's `/hooks/wake` endpoint:
 
 ```json
 {
-  "message": "🚨 **CRITICAL: 3 file(s) tampered on macbook.local!**\n\n🔴 `/Library/LaunchDaemons/malware.plist` (added, persistence)\n...",
-  "name": "feelgoodbot",
-  "deliver": true,
-  "channel": "last"
+  "text": "🚨 **CRITICAL: 3 file(s) tampered on macbook.local!**\n\n🔴 `/Library/LaunchDaemons/malware.plist` (added, persistence)\n...",
+  "mode": "now"
 }
 ```
 
@@ -171,10 +169,10 @@ feelgoodbot uses Clawdbot's `/hooks/agent` endpoint:
 
 ### What Happens
 
-When an alert fires, Clawdbot/Openclaw:
-1. Receives the webhook and runs an isolated agent session
-2. Sends you a message on your last active channel (Telegram, Signal, etc.)
-3. Can execute follow-up actions based on the alert
+When an alert fires, Clawdbot:
+1. Receives the webhook and triggers an immediate heartbeat
+2. The agent sees the alert and notifies you on your active channel
+3. Can investigate and take follow-up actions
 
 ## Severity Levels
 
@@ -225,15 +223,6 @@ When an alert fires, Clawdbot/Openclaw:
 - Daemon runs with minimal privileges (escalates only when needed)
 - Alert webhooks use HMAC signing
 - Config file permissions enforced (0600)
-
-## Roadmap
-
-- [ ] v0.1 — Core CLI, snapshot, scan, diff
-- [ ] v0.2 — Daemon mode with launchd
-- [ ] v0.3 — Clawdbot integration
-- [ ] v0.4 — Response actions (network disconnect, shutdown)
-- [ ] v0.5 — Real-time fsnotify monitoring
-- [ ] v1.0 — Production ready, Homebrew tap
 
 ## License
 
