@@ -1,7 +1,7 @@
 # FeelGoodBot 🛡️
 ## Pronounced "Feel good, bot"
 
-**Malware Detection for macOS** — Know when you've been compromised.
+**Malware Detection + TOTP Step-Up Auth for macOS** — Know when you've been compromised, and control what your AI can do.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -10,6 +10,11 @@
 Traditional antivirus tries to *prevent* malware. **feelgoodbot** focuses on *detection* — continuously monitoring your system for signs of compromise and alerting you immediately when something changes.
 
 The reality: determined attackers might get in. The question is how fast you detect it, and what will you do about it.
+
+## Features
+
+1. **File Integrity Monitoring** — Detect tampering of critical system files
+2. **TOTP Step-Up Authentication** — Require OTP codes for sensitive AI agent actions
 
 ## How It Works
 
@@ -175,6 +180,70 @@ indicators:
 | `recursive` | bool | If true, scan subdirectories. If false, only top-level. |
 | `category` | string | Category for grouping (e.g., `ai_agents`, `custom`) |
 
+## TOTP Step-Up Authentication 🔐
+
+Require OTP verification before your AI agent can perform sensitive actions like sending emails, making payments, or deleting files.
+
+### Setup
+
+```bash
+# Initialize TOTP (displays QR code for Google Authenticator)
+feelgoodbot totp init --account "you@feelgoodbot"
+
+# Verify it works
+feelgoodbot totp verify
+
+# Check status
+feelgoodbot totp status
+```
+
+### Configure Protected Actions
+
+```bash
+# Add actions that require step-up
+feelgoodbot totp actions add "send_email"
+feelgoodbot totp actions add "payment:*"      # Wildcard: any payment action
+feelgoodbot totp actions add "delete:*"
+feelgoodbot totp actions add "ssh:*"
+feelgoodbot totp actions add "gateway:*"      # Clawdbot config changes
+feelgoodbot totp actions add "voice_call:*"
+feelgoodbot totp actions add "publish:*"
+
+# List protected actions
+feelgoodbot totp actions list
+```
+
+### How It Works
+
+1. AI agent attempts a sensitive action (e.g., `send_email`)
+2. Agent calls `feelgoodbot totp check send_email`
+3. If no valid session, user is prompted for OTP via Telegram/CLI
+4. User enters 6-digit code from Google Authenticator
+5. Session created (15 min cache) and action proceeds
+
+### TOTP Commands
+
+| Command | Description |
+|---------|-------------|
+| `feelgoodbot totp init` | Set up TOTP with QR code |
+| `feelgoodbot totp verify [code]` | Test a code |
+| `feelgoodbot totp status` | Show TOTP status and session |
+| `feelgoodbot totp check <action>` | Check if action needs step-up |
+| `feelgoodbot totp reset` | Remove TOTP config |
+| `feelgoodbot totp backup show` | Show remaining backup codes |
+| `feelgoodbot totp backup regenerate` | Generate new backup codes |
+| `feelgoodbot totp actions list` | List protected actions |
+| `feelgoodbot totp actions add <action>` | Add protected action |
+| `feelgoodbot totp actions remove <action>` | Remove protected action |
+
+### Security Model
+
+- **CLI-only setup/reset** — Requires physical/SSH access
+- **Telegram prompts** — Convenient for daily use
+- **15-minute sessions** — Balance security and usability
+- **Backup codes** — Recovery if phone is lost
+- **Self-protecting config** — Modifying step-up config requires step-up
+
 ## Commands
 
 | Command | Description |
@@ -189,6 +258,7 @@ indicators:
 | `feelgoodbot config` | Show/edit configuration |
 | `feelgoodbot indicators list` | List monitored paths |
 | `feelgoodbot indicators add <path>` | Add custom path |
+| `feelgoodbot totp *` | TOTP step-up auth (see above) |
 
 ## Clawdbot Integration
 
