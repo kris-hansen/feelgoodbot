@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -15,6 +17,7 @@ import (
 	"github.com/kris-hansen/feelgoodbot/internal/daemon"
 	"github.com/kris-hansen/feelgoodbot/internal/scanner"
 	"github.com/kris-hansen/feelgoodbot/internal/snapshot"
+	"github.com/kris-hansen/feelgoodbot/internal/totp"
 	"github.com/kris-hansen/feelgoodbot/pkg/indicators"
 )
 
@@ -57,6 +60,7 @@ func init() {
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(indicatorsCmd)
+	rootCmd.AddCommand(totpCmd)
 }
 
 // init command - create initial baseline
@@ -745,4 +749,580 @@ func formatCategory(cat string) string {
 	default:
 		return cat
 	}
+}
+
+// =============================================================================
+// TOTP Step-Up Authentication Commands
+// =============================================================================
+
+// totp command - manage TOTP step-up authentication
+var totpCmd = &cobra.Command{
+	Use:   "totp",
+	Short: "Manage TOTP step-up authentication",
+	Long: `Manage TOTP-based step-up authentication for sensitive actions.
+
+TOTP (Time-based One-Time Password) provides an additional security layer
+for sensitive operations. When enabled, certain actions will require you
+to enter a code from your authenticator app (e.g., Google Authenticator).
+
+Commands:
+  init      Set up TOTP with QR code for authenticator app
+  verify    Test a TOTP code
+  reset     Remove TOTP configuration (requires current code)
+  backup    Show or regenerate backup codes
+  status    Show TOTP configuration status
+  actions   Manage which actions require step-up`,
+}
+
+var totpAccountName string
+
+var totpInitCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Initialize TOTP authentication",
+	Long: `Set up TOTP authentication by generating a secret and displaying
+a QR code that can be scanned with Google Authenticator or similar apps.
+
+This command must be run from the CLI (not remotely) for security.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		store, err := totp.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to create TOTP store: %w", err)
+		}
+
+		if store.IsInitialized() {
+			fmt.Println("⚠️  TOTP is already initialized.")
+			fmt.Println("   Use 'feelgoodbot totp reset' to reinitialize.")
+			return nil
+		}
+
+		// Get account name
+		accountName := totpAccountName
+		if accountName == "" {
+			hostname, _ := os.Hostname()
+			accountName = fmt.Sprintf("feelgoodbot@%s", hostname)
+		}
+
+		fmt.Println("🔐 Initializing TOTP step-up authentication...")
+		fmt.Println()
+
+		// Initialize TOTP
+		data, uri, err := store.Initialize(accountName)
+		if err != nil {
+			return fmt.Errorf("failed to initialize TOTP: %w", err)
+		}
+
+		// Generate and display QR code
+		qrCode, err := totp.GenerateQRCode(uri)
+		if err != nil {
+			return fmt.Errorf("failed to generate QR code: %w", err)
+		}
+
+		fmt.Println("📱 Scan this QR code with Google Authenticator:")
+		fmt.Println()
+		fmt.Println(qrCode)
+		fmt.Println()
+		fmt.Printf("   Account: %s\n", accountName)
+		fmt.Printf("   Issuer:  %s\n", totp.Issuer)
+		fmt.Println()
+
+		// Show backup codes
+		fmt.Println("🔑 Backup codes (save these somewhere safe!):")
+		fmt.Println()
+		for _, code := range data.BackupCodes {
+			fmt.Printf("   %s\n", code)
+		}
+		fmt.Println()
+
+		// Verify setup
+		fmt.Println("Please verify setup by entering the current code from your authenticator:")
+		fmt.Print("   Code: ")
+
+		reader := bufio.NewReader(os.Stdin)
+		code, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read input: %w", err)
+		}
+
+		code = strings.TrimSpace(code)
+		valid, err := store.Validate(code)
+		if err != nil {
+			return fmt.Errorf("validation error: %w", err)
+		}
+
+		if !valid {
+			// Remove the setup since verification failed
+			_ = store.Reset()
+			fmt.Println()
+			fmt.Println("❌ Invalid code. TOTP setup cancelled.")
+			fmt.Println("   Please run 'feelgoodbot totp init' again.")
+			return nil
+		}
+
+		fmt.Println()
+		fmt.Println("✅ TOTP initialized successfully!")
+		fmt.Println()
+		fmt.Println("Next steps:")
+		fmt.Println("  feelgoodbot totp actions add <action>  - Add actions requiring step-up")
+		fmt.Println("  feelgoodbot totp status                - View current configuration")
+
+		return nil
+	},
+}
+
+var totpVerifyCmd = &cobra.Command{
+	Use:   "verify [code]",
+	Short: "Verify a TOTP code",
+	Long:  `Test that a TOTP code is valid. Useful for debugging.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		store, err := totp.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to access TOTP store: %w", err)
+		}
+
+		if !store.IsInitialized() {
+			fmt.Println("❌ TOTP not initialized. Run 'feelgoodbot totp init' first.")
+			return nil
+		}
+
+		var code string
+		if len(args) > 0 {
+			code = args[0]
+		} else {
+			fmt.Print("Enter code: ")
+			reader := bufio.NewReader(os.Stdin)
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("failed to read input: %w", err)
+			}
+			code = strings.TrimSpace(input)
+		}
+
+		valid, err := store.Validate(code)
+		if err != nil {
+			return fmt.Errorf("validation error: %w", err)
+		}
+
+		if valid {
+			fmt.Println("✅ Code is valid")
+		} else {
+			fmt.Println("❌ Code is invalid")
+		}
+
+		return nil
+	},
+}
+
+var totpResetCmd = &cobra.Command{
+	Use:   "reset",
+	Short: "Reset TOTP configuration",
+	Long: `Remove the current TOTP configuration. This requires entering a valid
+code to confirm you have access to the authenticator.
+
+After reset, you can run 'feelgoodbot totp init' to set up a new secret.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		store, err := totp.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to access TOTP store: %w", err)
+		}
+
+		if !store.IsInitialized() {
+			fmt.Println("ℹ️  TOTP is not initialized. Nothing to reset.")
+			return nil
+		}
+
+		fmt.Println("⚠️  This will remove your TOTP configuration.")
+		fmt.Println("   You will need to set up a new authenticator entry.")
+		fmt.Println()
+		fmt.Print("Enter current code to confirm: ")
+
+		reader := bufio.NewReader(os.Stdin)
+		code, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read input: %w", err)
+		}
+
+		code = strings.TrimSpace(code)
+		valid, err := store.Validate(code)
+		if err != nil {
+			return fmt.Errorf("validation error: %w", err)
+		}
+
+		if !valid {
+			fmt.Println("❌ Invalid code. Reset cancelled.")
+			return nil
+		}
+
+		if err := store.Reset(); err != nil {
+			return fmt.Errorf("failed to reset TOTP: %w", err)
+		}
+
+		fmt.Println("✅ TOTP configuration removed.")
+		fmt.Println("   Run 'feelgoodbot totp init' to set up again.")
+
+		return nil
+	},
+}
+
+var totpBackupCmd = &cobra.Command{
+	Use:   "backup",
+	Short: "Show or regenerate backup codes",
+}
+
+var totpBackupShowCmd = &cobra.Command{
+	Use:   "show",
+	Short: "Show remaining backup codes",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		store, err := totp.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to access TOTP store: %w", err)
+		}
+
+		if !store.IsInitialized() {
+			fmt.Println("❌ TOTP not initialized. Run 'feelgoodbot totp init' first.")
+			return nil
+		}
+
+		// Require authentication to view backup codes
+		fmt.Print("Enter code to view backup codes: ")
+		reader := bufio.NewReader(os.Stdin)
+		code, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read input: %w", err)
+		}
+
+		valid, err := store.Validate(strings.TrimSpace(code))
+		if err != nil {
+			return fmt.Errorf("validation error: %w", err)
+		}
+
+		if !valid {
+			fmt.Println("❌ Invalid code.")
+			return nil
+		}
+
+		codes, err := store.GetBackupCodes()
+		if err != nil {
+			return fmt.Errorf("failed to get backup codes: %w", err)
+		}
+
+		fmt.Println()
+		fmt.Println("🔑 Remaining backup codes:")
+		fmt.Println()
+		if len(codes) == 0 {
+			fmt.Println("   (no backup codes remaining)")
+		} else {
+			for _, c := range codes {
+				fmt.Printf("   %s\n", c)
+			}
+		}
+		fmt.Printf("\n   %d of %d codes remaining\n", len(codes), totp.BackupCodeCount)
+
+		return nil
+	},
+}
+
+var totpBackupRegenCmd = &cobra.Command{
+	Use:   "regenerate",
+	Short: "Generate new backup codes (invalidates old ones)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		store, err := totp.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to access TOTP store: %w", err)
+		}
+
+		if !store.IsInitialized() {
+			fmt.Println("❌ TOTP not initialized. Run 'feelgoodbot totp init' first.")
+			return nil
+		}
+
+		fmt.Println("⚠️  This will invalidate all existing backup codes.")
+		fmt.Print("Enter code to confirm: ")
+
+		reader := bufio.NewReader(os.Stdin)
+		code, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read input: %w", err)
+		}
+
+		valid, err := store.Validate(strings.TrimSpace(code))
+		if err != nil {
+			return fmt.Errorf("validation error: %w", err)
+		}
+
+		if !valid {
+			fmt.Println("❌ Invalid code.")
+			return nil
+		}
+
+		codes, err := store.RegenerateBackupCodes()
+		if err != nil {
+			return fmt.Errorf("failed to regenerate backup codes: %w", err)
+		}
+
+		fmt.Println()
+		fmt.Println("🔑 New backup codes (save these somewhere safe!):")
+		fmt.Println()
+		for _, c := range codes {
+			fmt.Printf("   %s\n", c)
+		}
+		fmt.Println()
+		fmt.Println("✅ Backup codes regenerated. Old codes are now invalid.")
+
+		return nil
+	},
+}
+
+var totpStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show TOTP configuration status",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Println("🔐 TOTP Status")
+		fmt.Println()
+
+		store, err := totp.NewStore()
+		if err != nil {
+			fmt.Printf("   Status: ❌ Error accessing store: %v\n", err)
+			return nil
+		}
+
+		if !store.IsInitialized() {
+			fmt.Println("   Status:  🔴 Not initialized")
+			fmt.Println()
+			fmt.Println("   Run 'feelgoodbot totp init' to set up step-up authentication.")
+			return nil
+		}
+
+		fmt.Println("   Status:  🟢 Initialized")
+
+		// Load data for details
+		data, err := store.Load()
+		if err == nil {
+			fmt.Printf("   Account: %s\n", data.AccountName)
+			fmt.Printf("   Created: %s\n", data.CreatedAt.Format("2006-01-02 15:04"))
+			fmt.Printf("   Backup codes remaining: %d/%d\n", len(data.BackupCodes), totp.BackupCodeCount)
+		}
+
+		// Check session
+		sm, err := totp.NewSessionManager(0)
+		if err == nil && sm.IsValid() {
+			remaining := sm.TimeRemaining()
+			fmt.Printf("   Session: 🟢 Active (%.0f min remaining)\n", remaining.Minutes())
+		} else {
+			fmt.Println("   Session: ⚪ No active session")
+		}
+
+		// Show step-up config
+		mgr, err := totp.NewStepUpManager()
+		if err == nil {
+			cfg := mgr.GetConfig()
+			fmt.Println()
+			fmt.Println("   Step-up actions:")
+			if len(cfg.RequireStepUp) == 0 {
+				fmt.Println("     (none configured)")
+			} else {
+				for _, action := range cfg.RequireStepUp {
+					fmt.Printf("     • %s\n", action)
+				}
+			}
+			fmt.Printf("   Session TTL: %d minutes\n", cfg.SessionTTLMinutes)
+		}
+
+		return nil
+	},
+}
+
+var totpActionsCmd = &cobra.Command{
+	Use:   "actions",
+	Short: "Manage actions that require step-up authentication",
+}
+
+var totpActionsListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List actions requiring step-up",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mgr, err := totp.NewStepUpManager()
+		if err != nil {
+			return fmt.Errorf("failed to load step-up config: %w", err)
+		}
+
+		cfg := mgr.GetConfig()
+
+		fmt.Println("🔐 Actions requiring step-up authentication:")
+		fmt.Println()
+
+		if len(cfg.RequireStepUp) == 0 {
+			fmt.Println("   (none configured)")
+		} else {
+			for _, action := range cfg.RequireStepUp {
+				fmt.Printf("   • %s\n", action)
+			}
+		}
+
+		fmt.Println()
+		fmt.Printf("Session TTL: %d minutes\n", cfg.SessionTTLMinutes)
+		fmt.Printf("Enabled: %v\n", cfg.Enabled)
+
+		return nil
+	},
+}
+
+var totpActionsAddCmd = &cobra.Command{
+	Use:   "add <action>",
+	Short: "Add an action that requires step-up",
+	Long: `Add an action pattern that requires step-up authentication.
+
+Patterns support wildcards:
+  send_email       - Exact match
+  payment:*        - Matches any action starting with "payment:"
+  *                - Matches all actions
+
+Examples:
+  feelgoodbot totp actions add send_email
+  feelgoodbot totp actions add "delete:*"
+  feelgoodbot totp actions add config:update`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		action := args[0]
+
+		mgr, err := totp.NewStepUpManager()
+		if err != nil {
+			return fmt.Errorf("failed to load step-up config: %w", err)
+		}
+
+		// Require step-up to modify step-up config
+		if mgr.IsInitialized() {
+			ok, err := mgr.CheckOrPrompt("config:update")
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+		}
+
+		if err := mgr.AddAction(action); err != nil {
+			return err
+		}
+
+		fmt.Printf("✅ Added '%s' to step-up requirements\n", action)
+		return nil
+	},
+}
+
+var totpActionsRemoveCmd = &cobra.Command{
+	Use:   "remove <action>",
+	Short: "Remove an action from step-up requirements",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		action := args[0]
+
+		mgr, err := totp.NewStepUpManager()
+		if err != nil {
+			return fmt.Errorf("failed to load step-up config: %w", err)
+		}
+
+		// Require step-up to modify step-up config
+		if mgr.IsInitialized() {
+			ok, err := mgr.CheckOrPrompt("config:update")
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+		}
+
+		if err := mgr.RemoveAction(action); err != nil {
+			return err
+		}
+
+		fmt.Printf("✅ Removed '%s' from step-up requirements\n", action)
+		return nil
+	},
+}
+
+var totpRespondCmd = &cobra.Command{
+	Use:    "respond <code>",
+	Short:  "Submit an OTP response to a pending prompt",
+	Long:   `Used by Clawdbot to submit an OTP code received via Telegram to a pending step-up prompt.`,
+	Args:   cobra.ExactArgs(1),
+	Hidden: true, // Internal command for Clawdbot integration
+	RunE: func(cmd *cobra.Command, args []string) error {
+		code := strings.TrimSpace(args[0])
+		if code == "" {
+			return fmt.Errorf("code cannot be empty")
+		}
+
+		if err := totp.SubmitResponse(code); err != nil {
+			return err
+		}
+
+		fmt.Println("✅ OTP response submitted")
+		return nil
+	},
+}
+
+var totpCheckCmd = &cobra.Command{
+	Use:   "check <action>",
+	Short: "Check if an action requires step-up and prompt if needed",
+	Long: `Check if an action requires step-up authentication. If it does and 
+there's no valid session, prompts for an OTP code.
+
+Exit codes:
+  0 - Authenticated (or action doesn't require step-up)
+  1 - Authentication failed or denied
+
+Examples:
+  feelgoodbot totp check send_email
+  feelgoodbot totp check "delete:important_file"`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		action := args[0]
+
+		mgr, err := totp.NewStepUpManager()
+		if err != nil {
+			return fmt.Errorf("failed to create step-up manager: %w", err)
+		}
+
+		if !mgr.IsInitialized() {
+			// TOTP not set up, allow action
+			fmt.Println("ℹ️  TOTP not initialized, action allowed")
+			return nil
+		}
+
+		ok, err := mgr.CheckOrPrompt(action)
+		if err != nil {
+			return err
+		}
+
+		if !ok {
+			os.Exit(1)
+		}
+
+		return nil
+	},
+}
+
+func init() {
+	// TOTP init flags
+	totpInitCmd.Flags().StringVar(&totpAccountName, "account", "", "Account name for authenticator (default: feelgoodbot@hostname)")
+
+	// Add TOTP subcommands
+	totpCmd.AddCommand(totpInitCmd)
+	totpCmd.AddCommand(totpVerifyCmd)
+	totpCmd.AddCommand(totpResetCmd)
+	totpCmd.AddCommand(totpBackupCmd)
+	totpCmd.AddCommand(totpStatusCmd)
+	totpCmd.AddCommand(totpActionsCmd)
+	totpCmd.AddCommand(totpRespondCmd)
+	totpCmd.AddCommand(totpCheckCmd)
+
+	// Backup subcommands
+	totpBackupCmd.AddCommand(totpBackupShowCmd)
+	totpBackupCmd.AddCommand(totpBackupRegenCmd)
+
+	// Actions subcommands
+	totpActionsCmd.AddCommand(totpActionsListCmd)
+	totpActionsCmd.AddCommand(totpActionsAddCmd)
+	totpActionsCmd.AddCommand(totpActionsRemoveCmd)
 }
