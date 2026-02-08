@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 	"github.com/skip2/go-qrcode"
 )
@@ -108,15 +107,10 @@ func (s *Store) Initialize(accountName string) (*TOTPData, string, error) {
 
 // generateOTPAuthURI creates the otpauth:// URI for QR codes
 func (s *Store) generateOTPAuthURI(secret, accountName string) string {
-	key, _ := totp.Generate(totp.GenerateOpts{
-		Issuer:      Issuer,
-		AccountName: accountName,
-		Secret:      []byte(secret),
-		Algorithm:   otp.AlgorithmSHA1,
-		Digits:      otp.DigitsSix,
-		Period:      30,
-	})
-	return key.URL()
+	// Build the URI manually since we already have the base32 secret
+	// Format: otpauth://totp/ISSUER:ACCOUNT?secret=SECRET&issuer=ISSUER&algorithm=SHA1&digits=6&period=30
+	return fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&algorithm=SHA1&digits=6&period=30",
+		Issuer, accountName, secret, Issuer)
 }
 
 // GenerateQRCode creates a QR code image for the TOTP URI
