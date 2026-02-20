@@ -304,6 +304,128 @@ Examples:
 	},
 }
 
+// lockdownCmd is the command for emergency lockdown
+var lockdownCmd = &cobra.Command{
+	Use:   "lockdown",
+	Short: "Emergency lockdown mode",
+	Long: `Activate emergency lockdown to immediately revoke all sessions and block all gated actions.
+
+Usage:
+  feelgoodbot lockdown        # Activate lockdown (no TOTP needed - emergency!)
+  feelgoodbot lockdown lift   # Lift lockdown (requires TOTP)
+  feelgoodbot lockdown status # Check lockdown status
+
+In lockdown mode:
+  - All active tokens are revoked
+  - All pending gate requests are denied
+  - New gate requests will be blocked
+  - Requires TOTP to lift`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Activate lockdown
+		resp, err := socketPost("/lockdown", nil)
+		if err != nil {
+			return fmt.Errorf("failed to activate lockdown: %w", err)
+		}
+
+		var result struct {
+			Success bool `json:"success"`
+			Data    struct {
+				Lockdown       bool `json:"lockdown"`
+				TokensRevoked  int  `json:"tokens_revoked"`
+				RequestsDenied int  `json:"requests_denied"`
+			} `json:"data"`
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(resp, &result)
+
+		if !result.Success {
+			return errors.New(result.Error)
+		}
+
+		fmt.Println("🚨 LOCKDOWN ACTIVATED")
+		fmt.Printf("   Tokens revoked: %d\n", result.Data.TokensRevoked)
+		fmt.Printf("   Requests denied: %d\n", result.Data.RequestsDenied)
+		fmt.Println()
+		fmt.Println("All gated actions are now blocked.")
+		fmt.Println("Use 'feelgoodbot lockdown lift' with TOTP to restore access.")
+		return nil
+	},
+}
+
+var lockdownLiftCmd = &cobra.Command{
+	Use:   "lift [code]",
+	Short: "Lift lockdown (requires TOTP)",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var code string
+		if len(args) > 0 {
+			code = args[0]
+		} else {
+			fmt.Print("Enter TOTP code: ")
+			if _, err := fmt.Scanln(&code); err != nil {
+				return fmt.Errorf("failed to read code: %w", err)
+			}
+		}
+
+		resp, err := socketPost("/lockdown/lift", map[string]interface{}{
+			"code": strings.TrimSpace(code),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to lift lockdown: %w", err)
+		}
+
+		var result struct {
+			Success bool `json:"success"`
+			Data    struct {
+				Lockdown bool `json:"lockdown"`
+			} `json:"data"`
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(resp, &result)
+
+		if !result.Success {
+			return errors.New(result.Error)
+		}
+
+		fmt.Println("✅ Lockdown lifted")
+		fmt.Println("Gated actions are now permitted again.")
+		return nil
+	},
+}
+
+var lockdownStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Check lockdown status",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		resp, err := socketGet("/lockdown/status")
+		if err != nil {
+			return fmt.Errorf("failed to check status: %w", err)
+		}
+
+		var result struct {
+			Success bool `json:"success"`
+			Data    struct {
+				Lockdown bool `json:"lockdown"`
+			} `json:"data"`
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(resp, &result)
+
+		if !result.Success {
+			return errors.New(result.Error)
+		}
+
+		if result.Data.Lockdown {
+			fmt.Println("🚨 LOCKDOWN ACTIVE")
+			fmt.Println("All gated actions are blocked.")
+			fmt.Println("Use 'feelgoodbot lockdown lift' to restore access.")
+		} else {
+			fmt.Println("✅ System operating normally")
+		}
+		return nil
+	},
+}
+
 func init() {
 	gateRequestCmd.Flags().BoolVar(&gateWait, "wait", false, "Wait for approval")
 	gateRequestCmd.Flags().StringVar(&gateTimeout, "timeout", "5m", "Timeout when waiting")
@@ -318,7 +440,11 @@ func init() {
 	gateCmd.AddCommand(gatePendingCmd)
 	gateCmd.AddCommand(gateRevokeCmd)
 
+	lockdownCmd.AddCommand(lockdownLiftCmd)
+	lockdownCmd.AddCommand(lockdownStatusCmd)
+
 	rootCmd.AddCommand(gateCmd)
+	rootCmd.AddCommand(lockdownCmd)
 }
 
 // Helper functions

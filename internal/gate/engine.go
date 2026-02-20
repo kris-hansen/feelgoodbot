@@ -30,9 +30,10 @@ func NewEngine(cfg *Config) *Engine {
 		cfg = DefaultConfig()
 	}
 	return &Engine{
-		requests: make(map[string]*Request),
-		tokens:   make(map[string]*Token),
-		config:   cfg,
+		requests:    make(map[string]*Request),
+		tokens:      make(map[string]*Token),
+		config:      cfg,
+		rateLimiter: &RateLimiter{},
 	}
 }
 
@@ -153,13 +154,22 @@ func (e *Engine) Approve(requestID, code string) (*Request, error) {
 		return nil, fmt.Errorf("request expired")
 	}
 
+	// Check rate limit before attempting TOTP
+	if err := e.checkRateLimit(); err != nil {
+		return nil, err
+	}
+
 	// Verify TOTP
 	if e.totpVerify == nil {
 		return nil, fmt.Errorf("TOTP verifier not configured")
 	}
 	if !e.totpVerify(code) {
+		e.recordFailedAttempt()
 		return nil, fmt.Errorf("invalid TOTP code")
 	}
+
+	// Reset rate limiter on success
+	e.resetRateLimiter()
 
 	// Approve and issue token
 	req.Status = StatusApproved
@@ -333,12 +343,113 @@ func (e *Engine) Stats() map[string]interface{} {
 		}
 	}
 
+	// Rate limit info
+	rlInfo := e.getRateLimitInfo()
+
 	return map[string]interface{}{
-		"pending_requests": pending,
-		"approved_total":   approved,
-		"denied_total":     denied,
-		"active_tokens":    activeTokens,
+		"pending_requests":     pending,
+		"approved_total":       approved,
+		"denied_total":         denied,
+		"active_tokens":        activeTokens,
+		"rate_limit_locked":    rlInfo.locked,
+		"rate_limit_lockout":   rlInfo.lockedUntil,
+		"consecutive_failures": rlInfo.consecutiveFail,
 	}
+}
+
+// checkRateLimit checks if rate limiting should block the attempt.
+func (e *Engine) checkRateLimit() error {
+	e.rateLimiter.mu.Lock()
+	defer e.rateLimiter.mu.Unlock()
+
+	now := time.Now()
+
+	// Check if locked out
+	if now.Before(e.rateLimiter.lockedUntil) {
+		remaining := e.rateLimiter.lockedUntil.Sub(now).Round(time.Second)
+		return fmt.Errorf("rate limited: too many failed attempts, try again in %v", remaining)
+	}
+
+	// Clean old attempts outside window
+	window := e.config.RateLimit.Window
+	if window == 0 {
+		window = time.Minute
+	}
+	cutoff := now.Add(-window)
+	var recent []time.Time
+	for _, t := range e.rateLimiter.attempts {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	e.rateLimiter.attempts = recent
+
+	// Check if over rate limit
+	maxAttempts := e.config.RateLimit.MaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = 5
+	}
+	if len(e.rateLimiter.attempts) >= maxAttempts {
+		return fmt.Errorf("rate limited: max %d attempts per %v", maxAttempts, window)
+	}
+
+	return nil
+}
+
+// recordFailedAttempt records a failed TOTP attempt.
+func (e *Engine) recordFailedAttempt() {
+	e.rateLimiter.mu.Lock()
+	defer e.rateLimiter.mu.Unlock()
+
+	now := time.Now()
+	e.rateLimiter.attempts = append(e.rateLimiter.attempts, now)
+	e.rateLimiter.consecutiveFail++
+
+	// Check if should trigger lockout
+	lockoutAfter := e.config.RateLimit.LockoutAfter
+	if lockoutAfter == 0 {
+		lockoutAfter = 10
+	}
+	if e.rateLimiter.consecutiveFail >= lockoutAfter {
+		lockoutDuration := e.config.RateLimit.LockoutDuration
+		if lockoutDuration == 0 {
+			lockoutDuration = 15 * time.Minute
+		}
+		e.rateLimiter.lockedUntil = now.Add(lockoutDuration)
+	}
+}
+
+// resetRateLimiter resets rate limiting on successful authentication.
+func (e *Engine) resetRateLimiter() {
+	e.rateLimiter.mu.Lock()
+	defer e.rateLimiter.mu.Unlock()
+
+	e.rateLimiter.consecutiveFail = 0
+	e.rateLimiter.attempts = nil
+	e.rateLimiter.lockedUntil = time.Time{}
+}
+
+type rateLimitInfo struct {
+	locked          bool
+	lockedUntil     time.Time
+	consecutiveFail int
+}
+
+func (e *Engine) getRateLimitInfo() rateLimitInfo {
+	e.rateLimiter.mu.Lock()
+	defer e.rateLimiter.mu.Unlock()
+
+	return rateLimitInfo{
+		locked:          time.Now().Before(e.rateLimiter.lockedUntil),
+		lockedUntil:     e.rateLimiter.lockedUntil,
+		consecutiveFail: e.rateLimiter.consecutiveFail,
+	}
+}
+
+// GetRateLimitStatus returns current rate limit status.
+func (e *Engine) GetRateLimitStatus() (locked bool, lockedUntil time.Time, consecutiveFail int) {
+	info := e.getRateLimitInfo()
+	return info.locked, info.lockedUntil, info.consecutiveFail
 }
 
 // matchPattern matches an action against a glob pattern.

@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -314,5 +315,125 @@ func TestMatchPattern(t *testing.T) {
 				t.Errorf("matchPattern(%q, %q) = %v, want %v", tt.pattern, tt.action, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRateLimiting(t *testing.T) {
+	cfg := &Config{
+		RequestTTL: 5 * time.Minute,
+		TokenTTL:   15 * time.Minute,
+		RateLimit: RateLimitConfig{
+			MaxAttempts:     3,
+			Window:          time.Minute,
+			LockoutAfter:    5,
+			LockoutDuration: time.Minute,
+		},
+		BlockedActions: []ActionRule{{Pattern: "*", Mode: "strict"}},
+	}
+	e := NewEngine(cfg)
+	e.SetTOTPVerifier(func(code string) bool { return code == "123456" })
+
+	// Create a request
+	req, _ := e.CreateRequest("test_action", "cli", nil)
+
+	// First 3 bad attempts should fail with invalid code
+	for i := 0; i < 3; i++ {
+		_, err := e.Approve(req.ID, "wrong")
+		if err == nil {
+			t.Fatal("expected error for wrong code")
+		}
+		if err.Error() != "invalid TOTP code" {
+			t.Errorf("attempt %d: expected 'invalid TOTP code', got %q", i+1, err.Error())
+		}
+	}
+
+	// 4th attempt should be rate limited
+	_, err := e.Approve(req.ID, "wrong")
+	if err == nil {
+		t.Fatal("expected rate limit error")
+	}
+	if !strings.Contains(err.Error(), "rate limited") {
+		t.Errorf("expected rate limit error, got %q", err.Error())
+	}
+}
+
+func TestRateLimitLockout(t *testing.T) {
+	cfg := &Config{
+		RequestTTL: 5 * time.Minute,
+		TokenTTL:   15 * time.Minute,
+		RateLimit: RateLimitConfig{
+			MaxAttempts:     10, // High limit to not trigger per-window
+			Window:          time.Minute,
+			LockoutAfter:    3,           // Lock after 3 consecutive failures
+			LockoutDuration: time.Second, // Short for testing
+		},
+		BlockedActions: []ActionRule{{Pattern: "*", Mode: "strict"}},
+	}
+	e := NewEngine(cfg)
+	e.SetTOTPVerifier(func(code string) bool { return code == "123456" })
+
+	// Create a request
+	req, _ := e.CreateRequest("test_action", "cli", nil)
+
+	// 3 consecutive failures should trigger lockout
+	for i := 0; i < 3; i++ {
+		_, err := e.Approve(req.ID, "wrong")
+		if err == nil {
+			t.Fatal("expected error for wrong code")
+		}
+	}
+
+	// Should now be locked out
+	locked, _, _ := e.GetRateLimitStatus()
+	if !locked {
+		t.Error("expected to be locked out after 3 failures")
+	}
+
+	// Wait for lockout to expire
+	time.Sleep(time.Second + 100*time.Millisecond)
+
+	// Should be able to try again
+	locked, _, _ = e.GetRateLimitStatus()
+	if locked {
+		t.Error("lockout should have expired")
+	}
+}
+
+func TestRateLimitResetOnSuccess(t *testing.T) {
+	cfg := &Config{
+		RequestTTL: 5 * time.Minute,
+		TokenTTL:   15 * time.Minute,
+		RateLimit: RateLimitConfig{
+			MaxAttempts:     5,
+			Window:          time.Minute,
+			LockoutAfter:    10,
+			LockoutDuration: time.Minute,
+		},
+		BlockedActions: []ActionRule{{Pattern: "*", Mode: "strict"}},
+	}
+	e := NewEngine(cfg)
+	e.SetTOTPVerifier(func(code string) bool { return code == "123456" })
+
+	// Create a request
+	req, _ := e.CreateRequest("test_action", "cli", nil)
+
+	// 2 failed attempts
+	_, _ = e.Approve(req.ID, "wrong")
+	_, _ = e.Approve(req.ID, "wrong")
+
+	_, _, fails := e.GetRateLimitStatus()
+	if fails != 2 {
+		t.Errorf("expected 2 consecutive failures, got %d", fails)
+	}
+
+	// Successful attempt should reset
+	_, err := e.Approve(req.ID, "123456")
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	_, _, fails = e.GetRateLimitStatus()
+	if fails != 0 {
+		t.Errorf("expected 0 consecutive failures after success, got %d", fails)
 	}
 }

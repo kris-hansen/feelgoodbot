@@ -444,17 +444,27 @@ func (s *Server) handleLockdown(w http.ResponseWriter, r *http.Request) {
 	s.lockdownMu.Unlock()
 
 	// Revoke all tokens
-	count := s.gate.RevokeAll()
+	tokensRevoked := s.gate.RevokeAll()
+
+	// Deny all pending requests
+	requestsDenied := 0
+	for _, req := range s.gate.GetPending() {
+		if _, err := s.gate.Deny(req.ID, "lockdown activated"); err == nil {
+			requestsDenied++
+		}
+	}
 
 	if s.log != nil {
 		_ = s.log.LogLockdown("activate", "success", "api", map[string]string{
-			"tokens_revoked": fmt.Sprintf("%d", count),
+			"tokens_revoked":  fmt.Sprintf("%d", tokensRevoked),
+			"requests_denied": fmt.Sprintf("%d", requestsDenied),
 		})
 	}
 
 	jsonResponse(w, map[string]interface{}{
-		"lockdown":       true,
-		"tokens_revoked": count,
+		"lockdown":        true,
+		"tokens_revoked":  tokensRevoked,
+		"requests_denied": requestsDenied,
 	})
 }
 
