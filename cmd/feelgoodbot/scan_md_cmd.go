@@ -134,6 +134,8 @@ func scanMarkdownReader(r io.Reader, name string) error {
 
 func getSeverityIcon(sev mdscanner.Severity) string {
 	switch sev {
+	case mdscanner.SeverityCritical:
+		return "🚨"
 	case mdscanner.SeverityHigh:
 		return "🔴"
 	case mdscanner.SeverityMedium:
