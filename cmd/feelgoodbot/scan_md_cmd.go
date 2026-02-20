@@ -91,6 +91,9 @@ func scanMarkdownReader(r io.Reader, name string) error {
 		return err
 	}
 
+	// Log to audit trail (best effort - don't fail if daemon not running)
+	logScanResult(name, result)
+
 	if scanMdJSON {
 		out, _ := json.MarshalIndent(struct {
 			File   string                `json:"file"`
@@ -140,6 +143,34 @@ func getSeverityIcon(sev mdscanner.Severity) string {
 	default:
 		return "⚪"
 	}
+}
+
+// logScanResult logs the scan result to the audit trail (if daemon running)
+func logScanResult(file string, result *mdscanner.ScanResult) {
+	status := "clean"
+	details := ""
+
+	if !result.Clean {
+		status = "findings"
+		// Summarize findings
+		var types []string
+		typeCount := make(map[string]int)
+		for _, f := range result.Findings {
+			typeCount[string(f.Type)]++
+		}
+		for t, c := range typeCount {
+			types = append(types, fmt.Sprintf("%s:%d", t, c))
+		}
+		details = strings.Join(types, ",")
+	}
+
+	// Best effort - ignore errors if daemon not running
+	_, _ = socketPost("/logs/scan", map[string]interface{}{
+		"file":     file,
+		"findings": len(result.Findings),
+		"status":   status,
+		"details":  details,
+	})
 }
 
 func init() {

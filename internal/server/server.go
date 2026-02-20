@@ -106,6 +106,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/logs/summary", s.handleLogsSummary)
 	s.mux.HandleFunc("/logs/recent", s.handleLogsRecent)
 	s.mux.HandleFunc("/logs/verify", s.handleLogsVerify)
+	s.mux.HandleFunc("/logs/scan", s.handleLogScan)
 
 	// Security endpoints
 	s.mux.HandleFunc("/lockdown", s.handleLockdown)
@@ -429,6 +430,37 @@ func (s *Server) handleLogsVerify(w http.ResponseWriter, r *http.Request) {
 		"valid":  valid,
 		"errors": errors,
 	})
+}
+
+func (s *Server) handleLogScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		File     string `json:"file"`
+		Findings int    `json:"findings"`
+		Status   string `json:"status"` // "clean" or "findings"
+		Details  string `json:"details,omitempty"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if s.log != nil {
+		details := map[string]string{
+			"file":     req.File,
+			"findings": fmt.Sprintf("%d", req.Findings),
+		}
+		if req.Details != "" {
+			details["details"] = req.Details
+		}
+		_ = s.log.LogScan("markdown_scan", req.Status, "cli", details)
+	}
+
+	jsonResponse(w, map[string]bool{"logged": true})
 }
 
 // Security handlers

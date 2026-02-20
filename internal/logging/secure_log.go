@@ -24,6 +24,7 @@ const (
 	EventIntegrity EventType = "integrity" // File integrity events
 	EventLockdown  EventType = "lockdown"  // Lockdown events
 	EventSystem    EventType = "system"    // System events (startup, shutdown)
+	EventScan      EventType = "scan"      // Content scan events (markdown injection)
 )
 
 // Event represents a single log event.
@@ -146,6 +147,11 @@ func (l *SecureLog) LogIntegrity(action, status, source string, details map[stri
 // LogLockdown logs a lockdown event.
 func (l *SecureLog) LogLockdown(action, status, source string, details map[string]string) error {
 	return l.Log(EventLockdown, action, status, source, details)
+}
+
+// LogScan logs a content scan event.
+func (l *SecureLog) LogScan(action, status, source string, details map[string]string) error {
+	return l.Log(EventScan, action, status, source, details)
 }
 
 // GetSummary returns a summary of events within the given duration.
