@@ -15,6 +15,10 @@ The reality: determined attackers might get in. The question is how fast you det
 
 1. **File Integrity Monitoring** — Detect tampering of critical system files
 2. **TOTP Step-Up Authentication** — Require OTP codes for sensitive AI agent actions
+3. **Gate Engine** — Request/approve/deny lifecycle for sensitive actions with token management
+4. **Secure Logging** — Tamper-evident HMAC-signed logs with hash chain verification
+5. **Socket API** — Unix socket server for daemon communication (programmatic access)
+6. **Lockdown Mode** — Emergency lockdown that blocks all gated actions
 
 ## How It Works
 
@@ -244,7 +248,206 @@ feelgoodbot totp actions list
 - **Backup codes** — Recovery if phone is lost
 - **Self-protecting config** — Modifying step-up config requires step-up
 
+## Gate Engine 🚪
+
+The gate engine provides a request/approve/deny lifecycle for sensitive actions. Unlike simple TOTP checks, gates support asynchronous approval flows — perfect for AI agents that need human authorization via Telegram.
+
+### How Gate Mode Works
+
+1. Agent requests permission for a sensitive action
+2. Request enters "pending" state (5 min TTL)
+3. User receives Telegram notification with approve/deny options
+4. User approves with TOTP code → agent receives authorization token
+5. Agent uses token to execute the action (15 min TTL)
+
+### Gate CLI Commands
+
+```bash
+# Request approval for an action
+feelgoodbot gate request send_email
+feelgoodbot gate request --wait --timeout 2m payment:transfer  # Block until approved
+feelgoodbot gate request --async delete:backup                  # Non-blocking
+
+# Approve a pending request (requires TOTP)
+feelgoodbot gate approve <request-id>           # Prompts for TOTP
+feelgoodbot gate approve <request-id> --code 123456
+
+# Deny a pending request
+feelgoodbot gate deny <request-id>
+feelgoodbot gate deny <request-id> --reason "Not authorized"
+
+# Check request status
+feelgoodbot gate status <request-id>
+
+# List all pending requests
+feelgoodbot gate pending
+
+# Revoke tokens
+feelgoodbot gate revoke <token>      # Revoke specific token
+feelgoodbot gate revoke --all        # Revoke all active tokens
+```
+
+### Gate vs TOTP Check
+
+| Feature | `totp check` | `gate request` |
+|---------|--------------|----------------|
+| Flow | Synchronous | Asynchronous |
+| Use case | CLI/interactive | Telegram/agents |
+| Token returned | No | Yes |
+| Timeout | Immediate | 5 min default |
+| Best for | Human at terminal | AI agent automation |
+
+### Session-Aware Auto-Approval
+
+If you've recently authenticated (within session TTL), gate requests can auto-approve without prompting — configurable per action pattern.
+
+## Secure Logging 📜
+
+All security-relevant events are logged to a tamper-evident log with HMAC signatures and hash chaining.
+
+### What Gets Logged
+
+| Event Type | Description |
+|------------|-------------|
+| `auth` | TOTP verification attempts (success/failure) |
+| `gate` | Gate requests, approvals, denials |
+| `alert` | File integrity alerts |
+| `integrity` | Baseline changes, scan results |
+| `lockdown` | Lockdown activation/lift |
+| `system` | Daemon start/stop, config changes |
+
+### Log Commands
+
+```bash
+# View log summary (great for agents)
+feelgoodbot logs summary
+feelgoodbot logs summary --since 1h
+feelgoodbot logs summary --since 24h --type auth,gate
+feelgoodbot logs summary --json                # JSON output for parsing
+
+# Tail recent events
+feelgoodbot logs tail
+feelgoodbot logs tail -f                        # Follow mode
+feelgoodbot logs tail --type alerts
+
+# Verify log integrity (detect tampering)
+feelgoodbot logs verify
+```
+
+### Log Summary Output
+
+```
+📊 Security Log Summary (last 24h)
+─────────────────────────────────
+Total Events:     47
+Auth Attempts:    12 (2 failures)
+Gate Requests:    8 (6 approved, 1 denied, 1 expired)
+Integrity Alerts: 0
+Lockdowns:        0
+
+Recent Events:
+  • 2h ago  [gate]   payment:transfer approved via telegram
+  • 3h ago  [auth]   TOTP verification success
+  • 5h ago  [gate]   send_email auto-approved (session valid)
+```
+
+### Tamper Detection
+
+Each log entry contains:
+- HMAC signature (using secret key)
+- Hash of previous entry (chain)
+
+If anyone modifies the log file, `feelgoodbot logs verify` will detect broken chains.
+
+## Lockdown Mode 🔒
+
+Emergency lockdown blocks ALL gated actions immediately — no TOTP required to activate.
+
+```bash
+# Activate lockdown (immediate, no auth needed)
+feelgoodbot lockdown
+
+# Check lockdown status
+feelgoodbot lockdown status
+
+# Lift lockdown (requires TOTP)
+feelgoodbot lockdown lift
+feelgoodbot lockdown lift --code 123456
+```
+
+### When to Use Lockdown
+
+- Suspected compromise
+- Lost/stolen authenticator device
+- Traveling and want to disable remote actions
+- "Oh shit" moments
+
+### What Lockdown Does
+
+1. Revokes all active gate tokens
+2. Blocks all new gate requests
+3. Logs lockdown event
+4. Optional: triggers alert webhook
+
+Lifting lockdown requires TOTP verification (or backup code).
+
+## Socket API 🔌
+
+The daemon exposes a Unix socket for programmatic access. This enables AI agents and other tools to interact with feelgoodbot without spawning CLI processes.
+
+### Socket Location
+
+```
+~/.config/feelgoodbot/daemon.sock
+```
+
+Permissions: `0600` (owner only)
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/gate/request` | POST | Create gate request |
+| `/gate/approve` | POST | Approve with TOTP |
+| `/gate/deny` | POST | Deny request |
+| `/gate/status/{id}` | GET | Get request status |
+| `/gate/pending` | GET | List pending requests |
+| `/gate/revoke` | POST | Revoke token(s) |
+| `/gate/validate` | POST | Validate a token |
+| `/logs/summary` | GET | Get log summary |
+| `/logs/recent` | GET | Get recent events |
+| `/logs/verify` | GET | Verify log integrity |
+| `/lockdown` | POST | Activate lockdown |
+| `/lockdown/lift` | POST | Lift lockdown |
+| `/lockdown/status` | GET | Check lockdown status |
+| `/status` | GET | Overall daemon status |
+
+### Example: Gate Request via Socket
+
+```bash
+# Using curl over Unix socket
+curl --unix-socket ~/.config/feelgoodbot/daemon.sock \
+  -X POST http://localhost/gate/request \
+  -H "Content-Type: application/json" \
+  -d '{"action": "send_email", "source": "my-agent"}'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "data": {
+    "id": "req_abc123",
+    "action": "send_email",
+    "status": "pending",
+    "expires_at": "2024-01-15T10:05:00Z"
+  }
+}
+```
+
 ## Commands
+
+### File Integrity
 
 | Command | Description |
 |---------|-------------|
@@ -258,7 +461,45 @@ feelgoodbot totp actions list
 | `feelgoodbot config` | Show/edit configuration |
 | `feelgoodbot indicators list` | List monitored paths |
 | `feelgoodbot indicators add <path>` | Add custom path |
-| `feelgoodbot totp *` | TOTP step-up auth (see above) |
+
+### TOTP Step-Up
+
+| Command | Description |
+|---------|-------------|
+| `feelgoodbot totp init` | Set up TOTP with QR code |
+| `feelgoodbot totp verify [code]` | Test a code |
+| `feelgoodbot totp status` | Show TOTP status and session |
+| `feelgoodbot totp check <action>` | Check if action needs step-up |
+| `feelgoodbot totp actions list` | List protected actions |
+| `feelgoodbot totp actions add <pattern>` | Add protected action |
+| `feelgoodbot totp actions remove <pattern>` | Remove protected action |
+
+### Gate Engine
+
+| Command | Description |
+|---------|-------------|
+| `feelgoodbot gate request <action>` | Request approval for action |
+| `feelgoodbot gate approve <id>` | Approve pending request |
+| `feelgoodbot gate deny <id>` | Deny pending request |
+| `feelgoodbot gate status <id>` | Check request status |
+| `feelgoodbot gate pending` | List pending requests |
+| `feelgoodbot gate revoke <token>` | Revoke token |
+
+### Secure Logging
+
+| Command | Description |
+|---------|-------------|
+| `feelgoodbot logs summary` | View log summary |
+| `feelgoodbot logs tail` | Stream recent events |
+| `feelgoodbot logs verify` | Verify log integrity |
+
+### Lockdown
+
+| Command | Description |
+|---------|-------------|
+| `feelgoodbot lockdown` | Activate emergency lockdown |
+| `feelgoodbot lockdown status` | Check lockdown status |
+| `feelgoodbot lockdown lift` | Lift lockdown (requires TOTP) |
 
 ## Clawdbot Integration
 
@@ -331,10 +572,33 @@ When an alert fires, Clawdbot:
 │  CLI (cobra)                                            │
 │    ├── init, scan, snapshot, diff                       │
 │    ├── daemon start/stop/status                         │
-│    └── config, indicators                               │
+│    ├── totp init/verify/check/actions                   │
+│    ├── gate request/approve/deny/status/pending         │
+│    ├── logs summary/tail/verify                         │
+│    └── lockdown/lockdown lift                           │
+├─────────────────────────────────────────────────────────┤
+│  Gate Engine                                            │
+│    ├── Request lifecycle (pending→approved/denied)      │
+│    ├── Token management with TTL                        │
+│    ├── Session-aware auto-approval                      │
+│    ├── Pattern matching (payment:*, delete:*)           │
+│    └── Rate limiting (5 attempts/min, lockout@10)       │
+├─────────────────────────────────────────────────────────┤
+│  Secure Logging                                         │
+│    ├── HMAC-signed entries                              │
+│    ├── Hash chain (tamper detection)                    │
+│    ├── Summaries by type/time                           │
+│    └── Integrity verification                           │
+├─────────────────────────────────────────────────────────┤
+│  Socket API Server                                      │
+│    ├── Unix socket (owner-only: 0600)                   │
+│    ├── /gate/* endpoints                                │
+│    ├── /logs/* endpoints                                │
+│    ├── /lockdown endpoints                              │
+│    └── /status endpoint                                 │
 ├─────────────────────────────────────────────────────────┤
 │  Scanner                                                │
-│    ├── File hasher (SHA-256)                           │
+│    ├── File hasher (SHA-256)                            │
 │    ├── Permission checker                               │
 │    ├── Signature validator (codesign)                   │
 │    └── Diff engine                                      │
@@ -347,7 +611,8 @@ When an alert fires, Clawdbot:
 │  Daemon                                                 │
 │    ├── launchd integration                              │
 │    ├── Scheduled scans                                  │
-│    └── fsnotify real-time watching                      │
+│    ├── fsnotify real-time watching                      │
+│    └── Socket API server                                │
 ├─────────────────────────────────────────────────────────┤
 │  Alerts                                                 │
 │    ├── Clawdbot webhook                                 │
@@ -359,10 +624,15 @@ When an alert fires, Clawdbot:
 
 ## Security Considerations
 
-- Snapshot database is integrity-protected
-- Daemon runs with minimal privileges (escalates only when needed)
-- Alert webhooks use HMAC signing
-- Config file permissions enforced (0600)
+- **Snapshot database** is integrity-protected
+- **Daemon** runs with minimal privileges (escalates only when needed)
+- **Alert webhooks** use HMAC signing
+- **Config files** permissions enforced (0600)
+- **Secure logs** use HMAC signatures + hash chain for tamper detection
+- **Socket API** Unix socket with owner-only permissions (0600)
+- **Rate limiting** on TOTP: 5 attempts/min, lockout after 10 failures
+- **Emergency lockdown** can be activated without auth (lifting requires TOTP)
+- **Token TTLs** prevent replay attacks (15 min default)
 
 ## License
 
