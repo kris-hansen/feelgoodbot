@@ -26,21 +26,21 @@ const (
 type FindingType string
 
 const (
-	TypeHiddenInstruction  FindingType = "hidden_instruction"
-	TypeUnicodeTrick       FindingType = "unicode_trick"
-	TypeHiddenText         FindingType = "hidden_text"
-	TypeBase64Payload      FindingType = "base64_payload"
-	TypeInstructionLike    FindingType = "instruction_pattern"
-	TypeLinkMismatch       FindingType = "link_mismatch"
-	TypeSuspiciousAltText  FindingType = "suspicious_alt_text"
-	TypeShellInjection     FindingType = "shell_injection"
-	TypeCredentialAccess   FindingType = "credential_access"
-	TypeSecurityBypass     FindingType = "security_bypass"
-	TypeStagedDelivery     FindingType = "staged_delivery"
-	TypeSuspiciousURL      FindingType = "suspicious_url"
-	TypeDataExfiltration   FindingType = "data_exfiltration"
-	TypeKillChain          FindingType = "kill_chain"
-	TypeCodeBlockThreat    FindingType = "code_block_threat"
+	TypeHiddenInstruction FindingType = "hidden_instruction"
+	TypeUnicodeTrick      FindingType = "unicode_trick"
+	TypeHiddenText        FindingType = "hidden_text"
+	TypeBase64Payload     FindingType = "base64_payload"
+	TypeInstructionLike   FindingType = "instruction_pattern"
+	TypeLinkMismatch      FindingType = "link_mismatch"
+	TypeSuspiciousAltText FindingType = "suspicious_alt_text"
+	TypeShellInjection    FindingType = "shell_injection"
+	TypeCredentialAccess  FindingType = "credential_access"
+	TypeSecurityBypass    FindingType = "security_bypass"
+	TypeStagedDelivery    FindingType = "staged_delivery"
+	TypeSuspiciousURL     FindingType = "suspicious_url"
+	TypeDataExfiltration  FindingType = "data_exfiltration"
+	TypeKillChain         FindingType = "kill_chain"
+	TypeCodeBlockThreat   FindingType = "code_block_threat"
 )
 
 // Finding represents a potential prompt injection
@@ -357,7 +357,7 @@ func (s *Scanner) handleCodeBlockBoundary(line string, lineNum int, result *Scan
 }
 
 // analyzeCodeBlock performs deep analysis on completed code blocks
-func (s *Scanner) analyzeCodeBlock(endLine int, result *ScanResult) {
+func (s *Scanner) analyzeCodeBlock(_ int, result *ScanResult) {
 	content := s.codeBlockContent.String()
 
 	// Check for shell-like code blocks

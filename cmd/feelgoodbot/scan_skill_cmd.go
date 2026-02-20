@@ -129,14 +129,14 @@ func logSkillScanResult(path string, result *mdscanner.SkillScanResult) {
 
 	// Best effort - ignore errors if daemon not running
 	_, _ = socketPost("/logs/skill-scan", map[string]interface{}{
-		"path":      path,
-		"files":     result.TotalFiles,
-		"findings":  result.TotalIssues,
-		"critical":  result.Critical,
-		"high":      result.High,
-		"medium":    result.Medium,
-		"low":       result.Low,
-		"status":    status,
+		"path":     path,
+		"files":    result.TotalFiles,
+		"findings": result.TotalIssues,
+		"critical": result.Critical,
+		"high":     result.High,
+		"medium":   result.Medium,
+		"low":      result.Low,
+		"status":   status,
 	})
 }
 
