@@ -1,4 +1,4 @@
-// Package mdscanner detects potential prompt injection attacks in markdown.
+// Package mdscanner detects potential prompt injection and supply chain attacks in markdown.
 package mdscanner
 
 import (
@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"regexp"
 	"strings"
 	"unicode"
@@ -15,9 +16,10 @@ import (
 type Severity string
 
 const (
-	SeverityHigh   Severity = "high"
-	SeverityMedium Severity = "medium"
-	SeverityLow    Severity = "low"
+	SeverityHigh     Severity = "high"
+	SeverityMedium   Severity = "medium"
+	SeverityLow      Severity = "low"
+	SeverityCritical Severity = "critical"
 )
 
 // FindingType categorizes the type of potential injection
@@ -31,6 +33,14 @@ const (
 	TypeInstructionLike   FindingType = "instruction_pattern"
 	TypeLinkMismatch      FindingType = "link_mismatch"
 	TypeSuspiciousAltText FindingType = "suspicious_alt_text"
+	TypeShellInjection    FindingType = "shell_injection"
+	TypeCredentialAccess  FindingType = "credential_access"
+	TypeSecurityBypass    FindingType = "security_bypass"
+	TypeStagedDelivery    FindingType = "staged_delivery"
+	TypeSuspiciousURL     FindingType = "suspicious_url"
+	TypeDataExfiltration  FindingType = "data_exfiltration"
+	TypeKillChain         FindingType = "kill_chain"
+	TypeCodeBlockThreat   FindingType = "code_block_threat"
 )
 
 // Finding represents a potential prompt injection
@@ -56,6 +66,12 @@ type Config struct {
 	MaxLineLength int
 	// CheckBase64 enables base64 content analysis
 	CheckBase64 bool
+	// CheckShellCommands enables shell injection detection
+	CheckShellCommands bool
+	// CheckCredentials enables credential access pattern detection
+	CheckCredentials bool
+	// CheckURLs enables suspicious URL detection
+	CheckURLs bool
 	// CustomPatterns adds additional instruction patterns to detect
 	CustomPatterns []string
 }
@@ -63,15 +79,39 @@ type Config struct {
 // DefaultConfig returns sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
-		MaxLineLength: 10000,
-		CheckBase64:   true,
+		MaxLineLength:      10000,
+		CheckBase64:        true,
+		CheckShellCommands: true,
+		CheckCredentials:   true,
+		CheckURLs:          true,
 	}
 }
 
 // Scanner detects prompt injection in markdown
 type Scanner struct {
-	config   *Config
-	patterns []*regexp.Regexp
+	config              *Config
+	patterns            []*regexp.Regexp
+	shellPatterns       []*shellPattern
+	credentialPatterns  []*credentialPattern
+	securityBypass      []*regexp.Regexp
+	stagedDelivery      []*regexp.Regexp
+	exfiltrationPattern []*regexp.Regexp
+	killChainPatterns   []*regexp.Regexp
+	suspiciousTLDs      map[string]bool
+	inCodeBlock         bool
+	codeBlockLang       string
+	codeBlockStart      int
+	codeBlockContent    strings.Builder
+}
+
+type shellPattern struct {
+	pattern *regexp.Regexp
+	message string
+}
+
+type credentialPattern struct {
+	pattern *regexp.Regexp
+	message string
 }
 
 // New creates a scanner with the given config
@@ -79,7 +119,13 @@ func New(cfg *Config) *Scanner {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
-	s := &Scanner{config: cfg}
+	s := &Scanner{
+		config: cfg,
+		suspiciousTLDs: map[string]bool{
+			".tk": true, ".ml": true, ".ga": true, ".cf": true, ".gq": true,
+			".top": true, ".xyz": true, ".pw": true, ".cc": true, ".su": true,
+		},
+	}
 	s.compilePatterns()
 	return s
 }
@@ -118,6 +164,127 @@ func (s *Scanner) compilePatterns() {
 			s.patterns = append(s.patterns, re)
 		}
 	}
+
+	// Shell injection patterns
+	s.shellPatterns = []*shellPattern{
+		// Pipe to shell
+		{regexp.MustCompile(`(?i)curl\s+[^|]*\|\s*(sh|bash|zsh|dash|ksh)`), "curl piped to shell"},
+		{regexp.MustCompile(`(?i)wget\s+[^|]*\|\s*(sh|bash|zsh|dash|ksh)`), "wget piped to shell"},
+		{regexp.MustCompile(`(?i)curl\s+[^|]*\|\s*sudo\s+(sh|bash)`), "curl piped to sudo shell"},
+		// Download and execute
+		{regexp.MustCompile(`(?i)wget\s+.*&&\s*chmod\s+\+x`), "wget with chmod +x"},
+		{regexp.MustCompile(`(?i)curl\s+.*-o\s+\S+.*&&\s*chmod`), "curl download with chmod"},
+		{regexp.MustCompile(`(?i)curl\s+.*>\s*\S+\.sh.*&&`), "curl redirect to script"},
+		// Eval patterns
+		{regexp.MustCompile(`(?i)eval\s*["\']?\$\(`), "eval with command substitution"},
+		{regexp.MustCompile(`(?i)eval\s*["\']?\` + "`"), "eval with backticks"},
+		{regexp.MustCompile(`(?i)\$\(\s*curl`), "command substitution with curl"},
+		// Base64 decode to shell
+		{regexp.MustCompile(`(?i)base64\s+(-d|--decode)\s*\|`), "base64 decode piped"},
+		{regexp.MustCompile(`(?i)echo\s+.*\|\s*base64\s+(-d|--decode)\s*\|\s*(sh|bash)`), "echo base64 decode to shell"},
+		// Bash networking
+		{regexp.MustCompile(`/dev/tcp/`), "bash /dev/tcp networking"},
+		{regexp.MustCompile(`/dev/udp/`), "bash /dev/udp networking"},
+		// Reverse shells
+		{regexp.MustCompile(`(?i)nc\s+(-e|-c)\s`), "netcat with execute flag"},
+		{regexp.MustCompile(`(?i)ncat\s+(-e|-c)\s`), "ncat with execute flag"},
+		{regexp.MustCompile(`(?i)bash\s+-i\s+>&`), "bash interactive redirect (reverse shell)"},
+		{regexp.MustCompile(`(?i)python[23]?\s+-c\s*['"]\s*import\s+(socket|subprocess|os)`), "python inline with dangerous imports"},
+		{regexp.MustCompile(`(?i)perl\s+-e\s*['"].*socket`), "perl inline socket"},
+		{regexp.MustCompile(`(?i)ruby\s+-rsocket\s+-e`), "ruby socket inline"},
+		// Process manipulation
+		{regexp.MustCompile(`(?i)pkill\s+(-9\s+)?`), "process kill command"},
+		{regexp.MustCompile(`(?i)killall\s+`), "killall command"},
+		// Disk operations
+		{regexp.MustCompile(`(?i)rm\s+(-rf?|--recursive)\s+[/~]`), "recursive delete from root or home"},
+		{regexp.MustCompile(`(?i)dd\s+if=.*of=/dev/`), "dd to device"},
+		{regexp.MustCompile(`(?i)mkfs\s`), "filesystem format command"},
+		// Cron/persistence
+		{regexp.MustCompile(`(?i)crontab\s+(-e|-r|-)?\s*<<`), "crontab heredoc"},
+		{regexp.MustCompile(`(?i)echo\s+.*>>\s*/etc/cron`), "append to cron"},
+		// Password/sudo tricks
+		{regexp.MustCompile(`(?i)echo\s+.*\|\s*sudo\s+-S`), "echo password to sudo"},
+		{regexp.MustCompile(`(?i)sudo\s+.*<<<`), "sudo with herestring"},
+	}
+
+	// Credential access patterns
+	s.credentialPatterns = []*credentialPattern{
+		// SSH keys
+		{regexp.MustCompile(`(?i)(cat|less|more|head|tail|cp|scp|rsync)\s+.*~?/?\.ssh/(id_|authorized_keys|known_hosts)`), "SSH key access"},
+		{regexp.MustCompile(`(?i)~/.ssh/id_(rsa|dsa|ecdsa|ed25519)`), "reference to SSH private key"},
+		// Environment files
+		{regexp.MustCompile(`(?i)(cat|source|\.)\s+.*\.env\b`), ".env file access"},
+		{regexp.MustCompile(`(?i)export\s+.*=.*\$\(cat.*\.env`), ".env export pattern"},
+		// API keys and tokens
+		{regexp.MustCompile(`(?i)\$\{?(OPENAI|ANTHROPIC|CLAUDE|GITHUB|AWS|GCP|AZURE|STRIPE|TWILIO|SENDGRID)_?(API)?_?(KEY|TOKEN|SECRET)\}?`), "API key environment variable"},
+		{regexp.MustCompile(`(?i)echo\s+\$\{?(API_KEY|SECRET|TOKEN|PASSWORD|CREDENTIALS)\}?`), "echoing sensitive env var"},
+		{regexp.MustCompile(`(?i)printenv\s+(API|SECRET|TOKEN|KEY|PASSWORD|CRED)`), "printenv sensitive variable"},
+		// Config files
+		{regexp.MustCompile(`(?i)(cat|less|more)\s+.*(\.aws/credentials|\.npmrc|\.pypirc|\.netrc|\.docker/config)`), "credential config file access"},
+		{regexp.MustCompile(`(?i)~/.aws/(credentials|config)`), "AWS credentials reference"},
+		{regexp.MustCompile(`(?i)~/.kube/config`), "Kubernetes config reference"},
+		{regexp.MustCompile(`(?i)/etc/(passwd|shadow|sudoers)`), "system auth file reference"},
+		// Keychain
+		{regexp.MustCompile(`(?i)security\s+(find|dump|delete)-(generic|internet)-password`), "macOS keychain access"},
+		{regexp.MustCompile(`(?i)keychain|KeyChain`), "keychain reference"},
+		// Git credentials
+		{regexp.MustCompile(`(?i)git\s+config\s+.*credential`), "git credential config"},
+		{regexp.MustCompile(`(?i)\.git-credentials`), "git credentials file"},
+		// Browser data
+		{regexp.MustCompile(`(?i)(Chrome|Firefox|Safari).*Cookies`), "browser cookies reference"},
+		{regexp.MustCompile(`(?i)Login\s*Data|logins\.json`), "browser login data"},
+	}
+
+	// Security bypass patterns
+	s.securityBypass = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)xattr\s+(-[rd]|--remove)\s*.*quarantine`),
+		regexp.MustCompile(`(?i)xattr\s+-c\s`),
+		regexp.MustCompile(`(?i)spctl\s+--master-disable`),
+		regexp.MustCompile(`(?i)csrutil\s+disable`),
+		regexp.MustCompile(`(?i)SIP.*disable`),
+		regexp.MustCompile(`(?i)setenforce\s+0`),
+		regexp.MustCompile(`(?i)iptables\s+-F`),
+		regexp.MustCompile(`(?i)ufw\s+disable`),
+		regexp.MustCompile(`(?i)systemctl\s+(stop|disable)\s+(firewalld|apparmor|selinux)`),
+		regexp.MustCompile(`(?i)Set-MpPreference\s+-DisableRealtimeMonitoring`),
+		regexp.MustCompile(`(?i)powershell.*-ExecutionPolicy\s+Bypass`),
+		regexp.MustCompile(`(?i)--no-sandbox`),
+		regexp.MustCompile(`(?i)TCC.*reset`),
+	}
+
+	// Staged delivery patterns
+	s.stagedDelivery = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(install|download)\s+(the\s+)?(required\s+)?prerequisite`),
+		regexp.MustCompile(`(?i)first\s*,?\s*(install|download|run)\s+`),
+		regexp.MustCompile(`(?i)required\s+dependency.*http`),
+		regexp.MustCompile(`(?i)(click|go\s+to)\s+(here|this\s+link)\s+to\s+(install|download)`),
+		regexp.MustCompile(`(?i)download\s+and\s+(run|execute|install)`),
+		regexp.MustCompile(`(?i)run\s+this\s+(command|script)\s+first`),
+		regexp.MustCompile(`(?i)paste\s+(this\s+)?(in|into)\s+(your\s+)?(terminal|shell|command)`),
+	}
+
+	// Data exfiltration patterns
+	s.exfiltrationPattern = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)curl\s+.*(-X\s*POST|-d\s|--data)`),
+		regexp.MustCompile(`(?i)curl\s+.*-F\s`),
+		regexp.MustCompile(`(?i)wget\s+--post`),
+		regexp.MustCompile(`(?i)nc\s+.*<\s*`),
+		regexp.MustCompile(`(?i)requests\.(post|put)\s*\(`),
+		regexp.MustCompile(`(?i)fetch\s*\([^)]*method:\s*['"]POST`),
+		regexp.MustCompile(`(?i)http\.request.*POST`),
+		regexp.MustCompile(`(?i)upload.*curl|curl.*upload`),
+		regexp.MustCompile(`(?i)webhook\.site|requestbin\.com|hookbin\.com|pipedream\.net`),
+		regexp.MustCompile(`(?i)ngrok\.io|localtunnel\.me`),
+		regexp.MustCompile(`(?i)discord\.com/api/webhooks`),
+		regexp.MustCompile(`(?i)api\.telegram\.org/bot`),
+	}
+
+	// Kill chain patterns (download -> make executable -> run)
+	s.killChainPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(curl|wget).*&&.*chmod.*&&.*(\.\/|sh|bash)`),
+		regexp.MustCompile(`(?i)(curl|wget).*;.*chmod.*;.*(\.\/|sh|bash)`),
+		regexp.MustCompile(`(?i)download.*install.*run`),
+	}
 }
 
 // ScanReader scans markdown from an io.Reader
@@ -129,6 +296,10 @@ func (s *Scanner) ScanReader(r io.Reader) (*ScanResult, error) {
 	scanner := bufio.NewScanner(r)
 	lineNum := 0
 
+	// Reset code block state
+	s.inCodeBlock = false
+	s.codeBlockContent.Reset()
+
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Text()
@@ -136,6 +307,18 @@ func (s *Scanner) ScanReader(r io.Reader) (*ScanResult, error) {
 		// Truncate very long lines for performance
 		if len(line) > s.config.MaxLineLength {
 			line = line[:s.config.MaxLineLength]
+		}
+
+		// Handle code block boundaries
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			s.handleCodeBlockBoundary(line, lineNum, result)
+			continue
+		}
+
+		// If inside code block, accumulate content
+		if s.inCodeBlock {
+			s.codeBlockContent.WriteString(line)
+			s.codeBlockContent.WriteString("\n")
 		}
 
 		// Run all checks on this line
@@ -149,6 +332,74 @@ func (s *Scanner) ScanReader(r io.Reader) (*ScanResult, error) {
 	result.LinesTotal = lineNum
 	result.Clean = len(result.Findings) == 0
 	return result, nil
+}
+
+// handleCodeBlockBoundary processes code block start/end markers
+func (s *Scanner) handleCodeBlockBoundary(line string, lineNum int, result *ScanResult) {
+	trimmed := strings.TrimSpace(line)
+
+	if !s.inCodeBlock {
+		// Starting a code block
+		s.inCodeBlock = true
+		s.codeBlockStart = lineNum
+		s.codeBlockContent.Reset()
+
+		// Extract language
+		lang := strings.TrimPrefix(trimmed, "```")
+		s.codeBlockLang = strings.ToLower(strings.TrimSpace(lang))
+	} else {
+		// Ending a code block - analyze accumulated content
+		s.analyzeCodeBlock(lineNum, result)
+		s.inCodeBlock = false
+		s.codeBlockLang = ""
+		s.codeBlockContent.Reset()
+	}
+}
+
+// analyzeCodeBlock performs deep analysis on completed code blocks
+func (s *Scanner) analyzeCodeBlock(_ int, result *ScanResult) {
+	content := s.codeBlockContent.String()
+
+	// Check for shell-like code blocks
+	isShell := s.codeBlockLang == "sh" || s.codeBlockLang == "bash" ||
+		s.codeBlockLang == "zsh" || s.codeBlockLang == "shell" ||
+		s.codeBlockLang == "" // Unmarked blocks are suspicious too
+
+	if isShell || s.codeBlockLang == "" {
+		// Check for kill chain patterns (multi-line sequences)
+		for _, pattern := range s.killChainPatterns {
+			if pattern.MatchString(content) {
+				result.Findings = append(result.Findings, Finding{
+					Line:     s.codeBlockStart,
+					Type:     TypeKillChain,
+					Severity: SeverityCritical,
+					Message:  "Kill chain detected: download → chmod → execute sequence",
+					Content:  truncate(content, 150),
+				})
+			}
+		}
+
+		// Check for multiple dangerous operations in same block
+		dangerCount := 0
+		var dangerOps []string
+
+		for _, sp := range s.shellPatterns {
+			if sp.pattern.MatchString(content) {
+				dangerCount++
+				dangerOps = append(dangerOps, sp.message)
+			}
+		}
+
+		if dangerCount >= 2 {
+			result.Findings = append(result.Findings, Finding{
+				Line:     s.codeBlockStart,
+				Type:     TypeCodeBlockThreat,
+				Severity: SeverityHigh,
+				Message:  fmt.Sprintf("Code block contains %d dangerous operations: %s", dangerCount, strings.Join(dangerOps, ", ")),
+				Content:  truncate(content, 150),
+			})
+		}
+	}
 }
 
 // ScanString scans markdown content from a string
@@ -179,6 +430,193 @@ func (s *Scanner) checkLine(line string, lineNum int, result *ScanResult) {
 	// 7. Check for base64 content
 	if s.config.CheckBase64 {
 		s.checkBase64(line, lineNum, result)
+	}
+
+	// 8. Check for shell injection patterns
+	if s.config.CheckShellCommands {
+		s.checkShellPatterns(line, lineNum, result)
+	}
+
+	// 9. Check for credential access patterns
+	if s.config.CheckCredentials {
+		s.checkCredentialPatterns(line, lineNum, result)
+	}
+
+	// 10. Check for security bypass patterns
+	s.checkSecurityBypass(line, lineNum, result)
+
+	// 11. Check for staged delivery patterns
+	s.checkStagedDelivery(line, lineNum, result)
+
+	// 12. Check for data exfiltration patterns
+	s.checkExfiltration(line, lineNum, result)
+
+	// 13. Check for suspicious URLs
+	if s.config.CheckURLs {
+		s.checkSuspiciousURLs(line, lineNum, result)
+	}
+}
+
+// checkShellPatterns detects dangerous shell command patterns
+func (s *Scanner) checkShellPatterns(line string, lineNum int, result *ScanResult) {
+	for _, sp := range s.shellPatterns {
+		if sp.pattern.MatchString(line) {
+			severity := SeverityHigh
+			// Escalate certain patterns to critical
+			if strings.Contains(sp.message, "reverse shell") ||
+				strings.Contains(sp.message, "piped to shell") ||
+				strings.Contains(sp.message, "piped to sudo") {
+				severity = SeverityCritical
+			}
+
+			result.Findings = append(result.Findings, Finding{
+				Line:     lineNum,
+				Type:     TypeShellInjection,
+				Severity: severity,
+				Message:  sp.message,
+				Content:  truncate(line, 100),
+			})
+		}
+	}
+}
+
+// checkCredentialPatterns detects credential access patterns
+func (s *Scanner) checkCredentialPatterns(line string, lineNum int, result *ScanResult) {
+	for _, cp := range s.credentialPatterns {
+		if cp.pattern.MatchString(line) {
+			result.Findings = append(result.Findings, Finding{
+				Line:     lineNum,
+				Type:     TypeCredentialAccess,
+				Severity: SeverityHigh,
+				Message:  cp.message,
+				Content:  truncate(line, 100),
+			})
+		}
+	}
+}
+
+// checkSecurityBypass detects attempts to disable security controls
+func (s *Scanner) checkSecurityBypass(line string, lineNum int, result *ScanResult) {
+	for _, pattern := range s.securityBypass {
+		if pattern.MatchString(line) {
+			result.Findings = append(result.Findings, Finding{
+				Line:     lineNum,
+				Type:     TypeSecurityBypass,
+				Severity: SeverityCritical,
+				Message:  "Security control bypass detected",
+				Content:  truncate(line, 100),
+			})
+		}
+	}
+}
+
+// checkStagedDelivery detects social engineering patterns for staged attacks
+func (s *Scanner) checkStagedDelivery(line string, lineNum int, result *ScanResult) {
+	for _, pattern := range s.stagedDelivery {
+		if pattern.MatchString(line) {
+			result.Findings = append(result.Findings, Finding{
+				Line:     lineNum,
+				Type:     TypeStagedDelivery,
+				Severity: SeverityMedium,
+				Message:  "Staged delivery pattern detected (social engineering)",
+				Content:  truncate(line, 100),
+			})
+		}
+	}
+}
+
+// checkExfiltration detects data exfiltration patterns
+func (s *Scanner) checkExfiltration(line string, lineNum int, result *ScanResult) {
+	for _, pattern := range s.exfiltrationPattern {
+		if pattern.MatchString(line) {
+			result.Findings = append(result.Findings, Finding{
+				Line:     lineNum,
+				Type:     TypeDataExfiltration,
+				Severity: SeverityHigh,
+				Message:  "Potential data exfiltration pattern",
+				Content:  truncate(line, 100),
+			})
+		}
+	}
+}
+
+// checkSuspiciousURLs detects risky URLs
+func (s *Scanner) checkSuspiciousURLs(line string, lineNum int, result *ScanResult) {
+	// Match URLs
+	urlPattern := regexp.MustCompile(`https?://[^\s"'\)>\]]+`)
+	urls := urlPattern.FindAllString(line, -1)
+
+	for _, url := range urls {
+		urlLower := strings.ToLower(url)
+
+		// Check for raw IP addresses
+		ipPattern := regexp.MustCompile(`https?://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})`)
+		if ipMatch := ipPattern.FindStringSubmatch(urlLower); len(ipMatch) > 1 {
+			// Verify it's a valid IP
+			if ip := net.ParseIP(ipMatch[1]); ip != nil {
+				// Allow localhost/private ranges with lower severity
+				if ip.IsLoopback() || ip.IsPrivate() {
+					result.Findings = append(result.Findings, Finding{
+						Line:     lineNum,
+						Type:     TypeSuspiciousURL,
+						Severity: SeverityLow,
+						Message:  "URL uses raw IP address (local/private)",
+						Content:  truncate(url, 80),
+					})
+				} else {
+					result.Findings = append(result.Findings, Finding{
+						Line:     lineNum,
+						Type:     TypeSuspiciousURL,
+						Severity: SeverityHigh,
+						Message:  "URL uses raw IP address (public)",
+						Content:  truncate(url, 80),
+					})
+				}
+			}
+		}
+
+		// Check for suspicious TLDs
+		for tld := range s.suspiciousTLDs {
+			if strings.Contains(urlLower, tld+"/") || strings.HasSuffix(urlLower, tld) {
+				result.Findings = append(result.Findings, Finding{
+					Line:     lineNum,
+					Type:     TypeSuspiciousURL,
+					Severity: SeverityMedium,
+					Message:  fmt.Sprintf("URL uses suspicious TLD: %s", tld),
+					Content:  truncate(url, 80),
+				})
+				break
+			}
+		}
+
+		// Check for URL shorteners
+		shorteners := []string{
+			"bit.ly", "tinyurl.com", "t.co", "goo.gl", "is.gd",
+			"cli.gs", "pic.gd", "short.to", "shorturl.at", "cutt.ly",
+		}
+		for _, shortener := range shorteners {
+			if strings.Contains(urlLower, shortener) {
+				result.Findings = append(result.Findings, Finding{
+					Line:     lineNum,
+					Type:     TypeSuspiciousURL,
+					Severity: SeverityMedium,
+					Message:  "URL shortener detected (obscures destination)",
+					Content:  truncate(url, 80),
+				})
+				break
+			}
+		}
+
+		// Check for discord CDN (commonly abused)
+		if strings.Contains(urlLower, "cdn.discordapp.com/attachments") {
+			result.Findings = append(result.Findings, Finding{
+				Line:     lineNum,
+				Type:     TypeSuspiciousURL,
+				Severity: SeverityMedium,
+				Message:  "Discord CDN URL (commonly used for malware hosting)",
+				Content:  truncate(url, 80),
+			})
+		}
 	}
 }
 
@@ -402,6 +840,20 @@ func (s *Scanner) checkBase64(line string, lineNum int, result *ScanResult) {
 					Type:     TypeBase64Payload,
 					Severity: SeverityHigh,
 					Message:  "Base64-encoded instruction-like content",
+					Content:  truncate(decodedStr, 80),
+				})
+				break
+			}
+		}
+
+		// Also check for shell patterns in decoded content
+		for _, sp := range s.shellPatterns {
+			if sp.pattern.MatchString(decodedStr) {
+				result.Findings = append(result.Findings, Finding{
+					Line:     lineNum,
+					Type:     TypeBase64Payload,
+					Severity: SeverityCritical,
+					Message:  "Base64-encoded shell command: " + sp.message,
 					Content:  truncate(decodedStr, 80),
 				})
 				break
