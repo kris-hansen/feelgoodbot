@@ -50,7 +50,7 @@ func New(cfg *Config) *Server {
 // Start starts the server.
 func (s *Server) Start() error {
 	// Remove existing socket
-	os.Remove(s.socketPath)
+	_ = os.Remove(s.socketPath)
 
 	// Create socket directory
 	dir := filepath.Dir(s.socketPath)
@@ -72,7 +72,7 @@ func (s *Server) Start() error {
 
 	// Log startup
 	if s.log != nil {
-		s.log.Log(logging.EventSystem, "server_start", "success", "daemon", nil)
+		_ = s.log.Log(logging.EventSystem, "server_start", "success", "daemon", nil)
 	}
 
 	// Serve
@@ -83,7 +83,7 @@ func (s *Server) Start() error {
 // Stop stops the server.
 func (s *Server) Stop() error {
 	if s.log != nil {
-		s.log.Log(logging.EventSystem, "server_stop", "success", "daemon", nil)
+		_ = s.log.Log(logging.EventSystem, "server_stop", "success", "daemon", nil)
 	}
 	if s.listener != nil {
 		return s.listener.Close()
@@ -123,16 +123,16 @@ type apiResponse struct {
 	Error   string      `json:"error,omitempty"`
 }
 
-func jsonResponse(w http.ResponseWriter, status int, data interface{}) {
+func jsonResponse(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(apiResponse{Success: status < 400, Data: data})
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(apiResponse{Success: true, Data: data})
 }
 
 func jsonError(w http.ResponseWriter, status int, err string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(apiResponse{Success: false, Error: err})
+	_ = json.NewEncoder(w).Encode(apiResponse{Success: false, Error: err})
 }
 
 func readJSON(r *http.Request, v interface{}) error {
@@ -183,12 +183,12 @@ func (s *Server) handleGateRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Log the request
 	if s.log != nil {
-		s.log.LogGate(req.Action, string(gateReq.Status), req.Source, map[string]string{
+		_ = s.log.LogGate(req.Action, string(gateReq.Status), req.Source, map[string]string{
 			"request_id": gateReq.ID,
 		})
 	}
 
-	jsonResponse(w, http.StatusOK, gateReq)
+	jsonResponse(w, gateReq)
 }
 
 func (s *Server) handleGateApprove(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +210,7 @@ func (s *Server) handleGateApprove(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Log failure
 		if s.log != nil {
-			s.log.LogAuth("gate_approve", "failure", "api", map[string]string{
+			_ = s.log.LogAuth("gate_approve", "failure", "api", map[string]string{
 				"request_id": req.RequestID,
 				"error":      err.Error(),
 			})
@@ -221,13 +221,13 @@ func (s *Server) handleGateApprove(w http.ResponseWriter, r *http.Request) {
 
 	// Log success
 	if s.log != nil {
-		s.log.LogGate(gateReq.Action, "approved", "api", map[string]string{
+		_ = s.log.LogGate(gateReq.Action, "approved", "api", map[string]string{
 			"request_id": gateReq.ID,
 			"token":      gateReq.Token[:8] + "...", // Truncate for log
 		})
 	}
 
-	jsonResponse(w, http.StatusOK, gateReq)
+	jsonResponse(w, gateReq)
 }
 
 func (s *Server) handleGateDeny(w http.ResponseWriter, r *http.Request) {
@@ -253,13 +253,13 @@ func (s *Server) handleGateDeny(w http.ResponseWriter, r *http.Request) {
 
 	// Log denial
 	if s.log != nil {
-		s.log.LogGate(gateReq.Action, "denied", "api", map[string]string{
+		_ = s.log.LogGate(gateReq.Action, "denied", "api", map[string]string{
 			"request_id": gateReq.ID,
 			"reason":     req.Reason,
 		})
 	}
 
-	jsonResponse(w, http.StatusOK, gateReq)
+	jsonResponse(w, gateReq)
 }
 
 func (s *Server) handleGateStatus(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +281,7 @@ func (s *Server) handleGateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, req)
+	jsonResponse(w, req)
 }
 
 func (s *Server) handleGatePending(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +291,7 @@ func (s *Server) handleGatePending(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pending := s.gate.GetPending()
-	jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonResponse(w, map[string]interface{}{
 		"pending": pending,
 		"count":   len(pending),
 	})
@@ -315,11 +315,11 @@ func (s *Server) handleGateRevoke(w http.ResponseWriter, r *http.Request) {
 	if req.All {
 		count := s.gate.RevokeAll()
 		if s.log != nil {
-			s.log.LogGate("revoke_all", "success", "api", map[string]string{
+			_ = s.log.LogGate("revoke_all", "success", "api", map[string]string{
 				"count": fmt.Sprintf("%d", count),
 			})
 		}
-		jsonResponse(w, http.StatusOK, map[string]int{"revoked": count})
+		jsonResponse(w, map[string]int{"revoked": count})
 		return
 	}
 
@@ -334,12 +334,12 @@ func (s *Server) handleGateRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.log != nil {
-		s.log.LogGate("revoke_token", "success", "api", map[string]string{
+		_ = s.log.LogGate("revoke_token", "success", "api", map[string]string{
 			"token": req.Token[:8] + "...",
 		})
 	}
 
-	jsonResponse(w, http.StatusOK, map[string]bool{"revoked": true})
+	jsonResponse(w, map[string]bool{"revoked": true})
 }
 
 func (s *Server) handleGateValidate(w http.ResponseWriter, r *http.Request) {
@@ -358,7 +358,7 @@ func (s *Server) handleGateValidate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	valid := s.gate.ValidateToken(req.Token, req.Action)
-	jsonResponse(w, http.StatusOK, map[string]bool{"valid": valid})
+	jsonResponse(w, map[string]bool{"valid": valid})
 }
 
 // Logging handlers
@@ -379,7 +379,7 @@ func (s *Server) handleLogsSummary(w http.ResponseWriter, r *http.Request) {
 
 	recentCount := 10
 	if rc := r.URL.Query().Get("recent"); rc != "" {
-		fmt.Sscanf(rc, "%d", &recentCount)
+		_, _ = fmt.Sscanf(rc, "%d", &recentCount)
 	}
 
 	summary, err := s.log.GetSummary(since, recentCount)
@@ -388,7 +388,7 @@ func (s *Server) handleLogsSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, summary)
+	jsonResponse(w, summary)
 }
 
 func (s *Server) handleLogsRecent(w http.ResponseWriter, r *http.Request) {
@@ -399,7 +399,7 @@ func (s *Server) handleLogsRecent(w http.ResponseWriter, r *http.Request) {
 
 	count := 20
 	if c := r.URL.Query().Get("count"); c != "" {
-		fmt.Sscanf(c, "%d", &count)
+		_, _ = fmt.Sscanf(c, "%d", &count)
 	}
 
 	eventType := logging.EventType(r.URL.Query().Get("type"))
@@ -410,7 +410,7 @@ func (s *Server) handleLogsRecent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, events)
+	jsonResponse(w, events)
 }
 
 func (s *Server) handleLogsVerify(w http.ResponseWriter, r *http.Request) {
@@ -425,7 +425,7 @@ func (s *Server) handleLogsVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonResponse(w, map[string]interface{}{
 		"valid":  valid,
 		"errors": errors,
 	})
@@ -447,12 +447,12 @@ func (s *Server) handleLockdown(w http.ResponseWriter, r *http.Request) {
 	count := s.gate.RevokeAll()
 
 	if s.log != nil {
-		s.log.LogLockdown("activate", "success", "api", map[string]string{
+		_ = s.log.LogLockdown("activate", "success", "api", map[string]string{
 			"tokens_revoked": fmt.Sprintf("%d", count),
 		})
 	}
 
-	jsonResponse(w, http.StatusOK, map[string]interface{}{
+	jsonResponse(w, map[string]interface{}{
 		"lockdown":       true,
 		"tokens_revoked": count,
 	})
@@ -484,10 +484,10 @@ func (s *Server) handleLockdownLift(w http.ResponseWriter, r *http.Request) {
 	s.lockdownMu.Unlock()
 
 	if s.log != nil {
-		s.log.LogLockdown("lift", "success", "api", nil)
+		_ = s.log.LogLockdown("lift", "success", "api", nil)
 	}
 
-	jsonResponse(w, http.StatusOK, map[string]bool{"lockdown": false})
+	jsonResponse(w, map[string]bool{"lockdown": false})
 }
 
 func (s *Server) handleLockdownStatus(w http.ResponseWriter, r *http.Request) {
@@ -500,7 +500,7 @@ func (s *Server) handleLockdownStatus(w http.ResponseWriter, r *http.Request) {
 	lockdown := s.lockdown
 	s.lockdownMu.RUnlock()
 
-	jsonResponse(w, http.StatusOK, map[string]bool{"lockdown": lockdown})
+	jsonResponse(w, map[string]bool{"lockdown": lockdown})
 }
 
 // Status handler
@@ -519,7 +519,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	stats["lockdown"] = lockdown
 	stats["socket"] = s.socketPath
 
-	jsonResponse(w, http.StatusOK, stats)
+	jsonResponse(w, stats)
 }
 
 // SetTOTPVerifier sets the TOTP verification function for lockdown lift.

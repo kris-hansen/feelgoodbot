@@ -136,12 +136,12 @@ func TestGetPending(t *testing.T) {
 	e := NewEngine(nil)
 
 	// Create a few requests
-	e.CreateRequest("action1", "cli", nil)
-	e.CreateRequest("action2", "cli", nil)
+	_, _ = e.CreateRequest("action1", "cli", nil)
+	_, _ = e.CreateRequest("action2", "cli", nil)
 	req3, _ := e.CreateRequest("action3", "cli", nil)
 
 	// Deny one
-	e.Deny(req3.ID, "denied")
+	_, _ = e.Deny(req3.ID, "denied")
 
 	pending := e.GetPending()
 	if len(pending) != 2 {
@@ -270,8 +270,8 @@ func TestStats(t *testing.T) {
 	req3, _ := e.CreateRequest("action3", "cli", nil)
 
 	// Approve one, deny one, leave one pending
-	e.Approve(req1.ID, "123456")
-	e.Deny(req2.ID, "denied")
+	_, _ = e.Approve(req1.ID, "123456")
+	_, _ = e.Deny(req2.ID, "denied")
 
 	stats := e.Stats()
 

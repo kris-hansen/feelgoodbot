@@ -113,7 +113,9 @@ Examples:
 		fmt.Println()
 		fmt.Print("Enter TOTP code: ")
 		var code string
-		fmt.Scanln(&code)
+		if _, err := fmt.Scanln(&code); err != nil {
+			return fmt.Errorf("failed to read code: %w", err)
+		}
 
 		return approveRequest(result.Data.ID, strings.TrimSpace(code))
 	},
@@ -130,7 +132,9 @@ var gateApproveCmd = &cobra.Command{
 			code = args[1]
 		} else {
 			fmt.Print("Enter TOTP code: ")
-			fmt.Scanln(&code)
+			if _, err := fmt.Scanln(&code); err != nil {
+				return fmt.Errorf("failed to read code: %w", err)
+			}
 		}
 		return approveRequest(requestID, strings.TrimSpace(code))
 	},
@@ -159,7 +163,7 @@ var gateDenyCmd = &cobra.Command{
 			Success bool   `json:"success"`
 			Error   string `json:"error"`
 		}
-		json.Unmarshal(resp, &result)
+		_ = json.Unmarshal(resp, &result)
 
 		if !result.Success {
 			return fmt.Errorf(result.Error)
@@ -194,7 +198,7 @@ var gateStatusCmd = &cobra.Command{
 			} `json:"data"`
 			Error string `json:"error"`
 		}
-		json.Unmarshal(resp, &result)
+		_ = json.Unmarshal(resp, &result)
 
 		if !result.Success {
 			return fmt.Errorf(result.Error)
@@ -233,7 +237,7 @@ var gatePendingCmd = &cobra.Command{
 				Count int `json:"count"`
 			} `json:"data"`
 		}
-		json.Unmarshal(resp, &result)
+		_ = json.Unmarshal(resp, &result)
 
 		if result.Data.Count == 0 {
 			fmt.Println("No pending requests")
@@ -284,7 +288,7 @@ Examples:
 			} `json:"data"`
 			Error string `json:"error"`
 		}
-		json.Unmarshal(resp, &result)
+		_ = json.Unmarshal(resp, &result)
 
 		if !result.Success {
 			return fmt.Errorf(result.Error)
@@ -356,7 +360,7 @@ func socketRequest(method, path string, data map[string]interface{}) ([]byte, er
 	if err != nil {
 		return nil, fmt.Errorf("daemon not running? %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return io.ReadAll(resp.Body)
 }
@@ -377,7 +381,7 @@ func approveRequest(requestID, code string) error {
 		} `json:"data"`
 		Error string `json:"error"`
 	}
-	json.Unmarshal(resp, &result)
+	_ = json.Unmarshal(resp, &result)
 
 	if !result.Success {
 		return fmt.Errorf(result.Error)
@@ -411,7 +415,7 @@ func waitForApproval(requestID, timeoutStr string) error {
 				Token  string `json:"token"`
 			} `json:"data"`
 		}
-		json.Unmarshal(resp, &result)
+		_ = json.Unmarshal(resp, &result)
 
 		switch result.Data.Status {
 		case "approved":

@@ -88,9 +88,9 @@ func TestVerifyIntegrity(t *testing.T) {
 	log, _ := NewSecureLog(logPath, secret)
 
 	// Log some events
-	log.Log(EventAuth, "login", "success", "cli", nil)
-	log.Log(EventGate, "send_email", "approved", "cli", nil)
-	log.Log(EventAlert, "warning", "detected", "daemon", nil)
+	_ = log.Log(EventAuth, "login", "success", "cli", nil)
+	_ = log.Log(EventGate, "send_email", "approved", "cli", nil)
+	_ = log.Log(EventAlert, "warning", "detected", "daemon", nil)
 
 	// Verify integrity
 	valid, errors, err := log.Verify()
@@ -110,14 +110,15 @@ func TestVerifyDetectsTampering(t *testing.T) {
 	log, _ := NewSecureLog(logPath, secret)
 
 	// Log some events
-	log.Log(EventAuth, "login", "success", "cli", nil)
-	log.Log(EventGate, "send_email", "approved", "cli", nil)
+	_ = log.Log(EventAuth, "login", "success", "cli", nil)
+	_ = log.Log(EventGate, "send_email", "approved", "cli", nil)
 
 	// Tamper with the file
 	data, _ := os.ReadFile(logPath)
-	tampered := append(data, []byte(`{"id":"fake","timestamp":"2024-01-01T00:00:00Z","type":"auth","action":"hack","status":"success","source":"evil","prev_hash":"wrong","hash":"fake"}`)...)
+	tampered := data
+	tampered = append(tampered, []byte(`{"id":"fake","timestamp":"2024-01-01T00:00:00Z","type":"auth","action":"hack","status":"success","source":"evil","prev_hash":"wrong","hash":"fake"}`)...)
 	tampered = append(tampered, '\n')
-	os.WriteFile(logPath, tampered, 0600)
+	_ = os.WriteFile(logPath, tampered, 0600)
 
 	// Reload and verify
 	log2, _ := NewSecureLog(logPath, secret)
@@ -141,13 +142,13 @@ func TestGetSummary(t *testing.T) {
 	log, _ := NewSecureLog(logPath, secret)
 
 	// Log various events
-	log.LogAuth("login", "success", "cli", nil)
-	log.LogAuth("login", "failure", "cli", nil)
-	log.LogAuth("login", "failure", "cli", nil)
-	log.LogGate("send_email", "pending", "cli", nil)
-	log.LogGate("send_email", "approved", "cli", nil)
-	log.LogGate("payment", "denied", "cli", nil)
-	log.LogIntegrity("file_changed", "alert", "daemon", nil)
+	_ = log.LogAuth("login", "success", "cli", nil)
+	_ = log.LogAuth("login", "failure", "cli", nil)
+	_ = log.LogAuth("login", "failure", "cli", nil)
+	_ = log.LogGate("send_email", "pending", "cli", nil)
+	_ = log.LogGate("send_email", "approved", "cli", nil)
+	_ = log.LogGate("payment", "denied", "cli", nil)
+	_ = log.LogIntegrity("file_changed", "alert", "daemon", nil)
 
 	summary, err := log.GetSummary(time.Hour, 5)
 	if err != nil {
@@ -188,10 +189,10 @@ func TestGetRecentByType(t *testing.T) {
 	log, _ := NewSecureLog(logPath, secret)
 
 	// Log various events
-	log.LogAuth("login", "success", "cli", nil)
-	log.LogGate("send_email", "approved", "cli", nil)
-	log.LogAuth("logout", "success", "cli", nil)
-	log.LogAlert("warning", "detected", "daemon", nil)
+	_ = log.LogAuth("login", "success", "cli", nil)
+	_ = log.LogGate("send_email", "approved", "cli", nil)
+	_ = log.LogAuth("logout", "success", "cli", nil)
+	_ = log.LogAlert("warning", "detected", "daemon", nil)
 
 	// Get only auth events
 	authEvents, err := log.GetRecent(10, EventAuth)
@@ -220,9 +221,9 @@ func TestHashChain(t *testing.T) {
 	log, _ := NewSecureLog(logPath, secret)
 
 	// Log events
-	log.Log(EventAuth, "action1", "success", "cli", nil)
-	log.Log(EventAuth, "action2", "success", "cli", nil)
-	log.Log(EventAuth, "action3", "success", "cli", nil)
+	_ = log.Log(EventAuth, "action1", "success", "cli", nil)
+	_ = log.Log(EventAuth, "action2", "success", "cli", nil)
+	_ = log.Log(EventAuth, "action3", "success", "cli", nil)
 
 	events, _ := log.GetRecent(10, "")
 
@@ -246,14 +247,14 @@ func TestPersistence(t *testing.T) {
 
 	// Create log and write events
 	log1, _ := NewSecureLog(logPath, secret)
-	log1.Log(EventAuth, "login", "success", "cli", nil)
-	log1.Log(EventGate, "send_email", "approved", "cli", nil)
+	_ = log1.Log(EventAuth, "login", "success", "cli", nil)
+	_ = log1.Log(EventGate, "send_email", "approved", "cli", nil)
 
 	// Create new log instance (simulates restart)
 	log2, _ := NewSecureLog(logPath, secret)
 
 	// Should be able to continue the chain
-	log2.Log(EventAuth, "logout", "success", "cli", nil)
+	_ = log2.Log(EventAuth, "logout", "success", "cli", nil)
 
 	// Verify all events
 	events, _ := log2.GetRecent(10, "")

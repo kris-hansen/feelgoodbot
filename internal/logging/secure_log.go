@@ -2,8 +2,8 @@
 package logging
 
 import (
-	cryptoRand "crypto/rand"
 	"crypto/hmac"
+	cryptoRand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,12 +18,12 @@ import (
 type EventType string
 
 const (
-	EventAuth       EventType = "auth"        // Authentication events
-	EventGate       EventType = "gate"        // Gate request/approve/deny
-	EventAlert      EventType = "alert"       // Security alerts
-	EventIntegrity  EventType = "integrity"   // File integrity events
-	EventLockdown   EventType = "lockdown"    // Lockdown events
-	EventSystem     EventType = "system"      // System events (startup, shutdown)
+	EventAuth      EventType = "auth"      // Authentication events
+	EventGate      EventType = "gate"      // Gate request/approve/deny
+	EventAlert     EventType = "alert"     // Security alerts
+	EventIntegrity EventType = "integrity" // File integrity events
+	EventLockdown  EventType = "lockdown"  // Lockdown events
+	EventSystem    EventType = "system"    // System events (startup, shutdown)
 )
 
 // Event represents a single log event.
@@ -41,19 +41,19 @@ type Event struct {
 
 // Summary provides aggregated log statistics.
 type Summary struct {
-	Period         string         `json:"period"`
-	StartTime      time.Time      `json:"start_time"`
-	EndTime        time.Time      `json:"end_time"`
-	TotalEvents    int            `json:"total_events"`
-	AuthAttempts   int            `json:"auth_attempts"`
-	AuthFailures   int            `json:"auth_failures"`
-	GateRequests   int            `json:"gate_requests"`
-	GateApprovals  int            `json:"gate_approvals"`
-	GateDenials    int            `json:"gate_denials"`
-	BlockedActions int            `json:"blocked_actions"`
-	IntegrityAlerts int           `json:"integrity_alerts"`
-	RecentEvents   []*Event       `json:"recent_events,omitempty"`
-	ByType         map[string]int `json:"by_type"`
+	Period          string         `json:"period"`
+	StartTime       time.Time      `json:"start_time"`
+	EndTime         time.Time      `json:"end_time"`
+	TotalEvents     int            `json:"total_events"`
+	AuthAttempts    int            `json:"auth_attempts"`
+	AuthFailures    int            `json:"auth_failures"`
+	GateRequests    int            `json:"gate_requests"`
+	GateApprovals   int            `json:"gate_approvals"`
+	GateDenials     int            `json:"gate_denials"`
+	BlockedActions  int            `json:"blocked_actions"`
+	IntegrityAlerts int            `json:"integrity_alerts"`
+	RecentEvents    []*Event       `json:"recent_events,omitempty"`
+	ByType          map[string]int `json:"by_type"`
 }
 
 // SecureLog provides tamper-evident logging.
@@ -62,7 +62,6 @@ type SecureLog struct {
 	path     string
 	secret   []byte // HMAC secret
 	lastHash string
-	file     *os.File
 }
 
 // NewSecureLog creates a new secure log.
@@ -110,7 +109,7 @@ func (l *SecureLog) Log(eventType EventType, action, status, source string, deta
 	if err != nil {
 		return fmt.Errorf("open log file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -342,6 +341,8 @@ func splitLines(data []byte) [][]byte {
 
 func generateEventID() string {
 	b := make([]byte, 8)
-	cryptoRand.Read(b)
+	if _, err := cryptoRand.Read(b); err != nil {
+		panic("failed to generate random event ID: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }

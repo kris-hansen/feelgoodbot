@@ -18,15 +18,15 @@ const (
 
 // Request represents a gate approval request.
 type Request struct {
-	ID        string        `json:"id"`
-	Action    string        `json:"action"`
-	Status    RequestStatus `json:"status"`
-	Token     string        `json:"token,omitempty"`     // Set when approved
-	Reason    string        `json:"reason,omitempty"`    // Set when denied
-	CreatedAt time.Time     `json:"created_at"`
-	ExpiresAt time.Time     `json:"expires_at"`
-	UpdatedAt time.Time     `json:"updated_at"`
-	Source    string        `json:"source,omitempty"`    // "cli", "telegram", etc.
+	ID        string            `json:"id"`
+	Action    string            `json:"action"`
+	Status    RequestStatus     `json:"status"`
+	Token     string            `json:"token,omitempty"`  // Set when approved
+	Reason    string            `json:"reason,omitempty"` // Set when denied
+	CreatedAt time.Time         `json:"created_at"`
+	ExpiresAt time.Time         `json:"expires_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
+	Source    string            `json:"source,omitempty"` // "cli", "telegram", etc.
 	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
@@ -42,22 +42,22 @@ type Token struct {
 
 // Engine manages gate requests and tokens.
 type Engine struct {
-	mu          sync.RWMutex
-	requests    map[string]*Request
-	tokens      map[string]*Token
-	config      *Config
-	onRequest   func(*Request) // Callback when new request created
-	totpVerify  func(code string) bool
+	mu           sync.RWMutex
+	requests     map[string]*Request
+	tokens       map[string]*Token
+	config       *Config
+	onRequest    func(*Request) // Callback when new request created
+	totpVerify   func(code string) bool
 	sessionValid func() bool
 }
 
 // Config holds gate engine configuration.
 type Config struct {
-	RequestTTL     time.Duration     `yaml:"request_ttl"`      // How long requests stay pending
-	TokenTTL       time.Duration     `yaml:"token_ttl"`        // How long tokens are valid
-	SessionTTL     time.Duration     `yaml:"session_ttl"`      // How long sessions last after TOTP
-	BlockedActions []ActionRule      `yaml:"blocked_actions"`  // Actions requiring gate
-	RateLimit      RateLimitConfig   `yaml:"rate_limit"`
+	RequestTTL     time.Duration   `yaml:"request_ttl"`     // How long requests stay pending
+	TokenTTL       time.Duration   `yaml:"token_ttl"`       // How long tokens are valid
+	SessionTTL     time.Duration   `yaml:"session_ttl"`     // How long sessions last after TOTP
+	BlockedActions []ActionRule    `yaml:"blocked_actions"` // Actions requiring gate
+	RateLimit      RateLimitConfig `yaml:"rate_limit"`
 }
 
 // ActionRule defines a gated action pattern.
@@ -68,8 +68,8 @@ type ActionRule struct {
 
 // RateLimitConfig controls rate limiting for TOTP attempts.
 type RateLimitConfig struct {
-	MaxAttempts   int           `yaml:"max_attempts"`    // Max attempts per window
-	Window        time.Duration `yaml:"window"`          // Time window
-	LockoutAfter  int           `yaml:"lockout_after"`   // Lockout after N total failures
+	MaxAttempts     int           `yaml:"max_attempts"`  // Max attempts per window
+	Window          time.Duration `yaml:"window"`        // Time window
+	LockoutAfter    int           `yaml:"lockout_after"` // Lockout after N total failures
 	LockoutDuration time.Duration `yaml:"lockout_duration"`
 }

@@ -58,7 +58,7 @@ func TestGateRequestEndpoint(t *testing.T) {
 	}
 
 	var resp apiResponse
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 
 	if !resp.Success {
 		t.Errorf("expected success, got error: %s", resp.Error)
@@ -82,7 +82,7 @@ func TestGateApproveEndpoint(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &createResp)
+	_ = json.Unmarshal(w.Body.Bytes(), &createResp)
 
 	// Now approve it
 	approveBody := bytes.NewBufferString(`{"request_id":"` + createResp.Data.ID + `","code":"123456"}`)
@@ -103,7 +103,7 @@ func TestGateApproveEndpoint(t *testing.T) {
 			Token  string `json:"token"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w2.Body.Bytes(), &approveResp)
+	_ = json.Unmarshal(w2.Body.Bytes(), &approveResp)
 
 	if !approveResp.Success {
 		t.Error("expected approval success")
@@ -133,7 +133,7 @@ func TestGateDenyEndpoint(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &createResp)
+	_ = json.Unmarshal(w.Body.Bytes(), &createResp)
 
 	// Deny it
 	denyBody := bytes.NewBufferString(`{"request_id":"` + createResp.Data.ID + `","reason":"not authorized"}`)
@@ -175,7 +175,7 @@ func TestGatePendingEndpoint(t *testing.T) {
 			Count int `json:"count"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 
 	if resp.Data.Count != 3 {
 		t.Errorf("expected 3 pending, got %d", resp.Data.Count)
@@ -211,7 +211,7 @@ func TestStatusEndpoint(t *testing.T) {
 			Lockdown bool `json:"lockdown"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 
 	if resp.Data.Lockdown {
 		t.Error("expected lockdown to be false initially")
@@ -241,7 +241,7 @@ func TestLockdownEndpoint(t *testing.T) {
 			Lockdown bool `json:"lockdown"`
 		} `json:"data"`
 	}
-	json.Unmarshal(w2.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp)
 
 	if !resp.Data.Lockdown {
 		t.Error("expected lockdown to be true after activation")

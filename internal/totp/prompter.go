@@ -53,8 +53,6 @@ type TelegramPrompter struct {
 	secret     string
 	chatID     string
 	timeout    time.Duration
-	// responseCallback is set when waiting for a response
-	responseCallback chan string
 }
 
 // TelegramConfig holds configuration for Telegram prompting
@@ -90,7 +88,7 @@ type webhookPayload struct {
 // For now, we'll use a simplified approach with a response file
 func (p *TelegramPrompter) Prompt(ctx context.Context, action string) (string, error) {
 	message := fmt.Sprintf("🔐 **Step-up authentication required**\n\nAction: `%s`\n\nPlease reply with your OTP code from Google Authenticator.", action)
-	
+
 	if err := p.sendMessage(message); err != nil {
 		return "", fmt.Errorf("failed to send prompt: %w", err)
 	}
@@ -132,7 +130,7 @@ func (p *TelegramPrompter) sendMessage(message string) error {
 	if err != nil {
 		return fmt.Errorf("failed to send webhook: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
@@ -151,7 +149,7 @@ func (p *TelegramPrompter) waitForResponse(ctx context.Context) (string, error) 
 
 	// Create a unique response file
 	responseFile := fmt.Sprintf("%s/.config/feelgoodbot/totp-response-%d", home, time.Now().UnixNano())
-	
+
 	// Clean up any existing response file
 	_ = os.Remove(responseFile)
 
@@ -188,7 +186,7 @@ func SubmitResponse(code string) error {
 	}
 
 	configDir := fmt.Sprintf("%s/.config/feelgoodbot", home)
-	
+
 	// Find the pending response file
 	entries, err := os.ReadDir(configDir)
 	if err != nil {

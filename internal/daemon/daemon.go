@@ -225,7 +225,7 @@ func (d *Daemon) writePidFile() error {
 // removePidFile removes the PID file
 func (d *Daemon) removePidFile() {
 	if d.config.PidFile != "" {
-		os.Remove(d.config.PidFile)
+		_ = os.Remove(d.config.PidFile)
 	}
 }
 

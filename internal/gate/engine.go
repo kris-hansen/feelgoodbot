@@ -98,7 +98,7 @@ func (e *Engine) CreateRequest(action, source string, metadata map[string]string
 			Metadata:  metadata,
 		}
 		e.requests[req.ID] = req
-		
+
 		// Create token
 		token := &Token{
 			ID:        req.Token,
@@ -108,7 +108,7 @@ func (e *Engine) CreateRequest(action, source string, metadata map[string]string
 			ExpiresAt: req.ExpiresAt,
 		}
 		e.tokens[token.ID] = token
-		
+
 		return req, nil
 	}
 
@@ -358,12 +358,16 @@ func matchPattern(pattern, action string) bool {
 
 func generateID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("failed to generate random ID: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }
 
 func generateToken() string {
 	b := make([]byte, 24)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("failed to generate random token: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }

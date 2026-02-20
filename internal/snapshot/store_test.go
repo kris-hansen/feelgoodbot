@@ -108,7 +108,9 @@ func TestStoreIntegrityCheck(t *testing.T) {
 	// Tamper with the file
 	baselinePath := filepath.Join(tmpDir, "baseline.json")
 	data, _ := os.ReadFile(baselinePath)
-	tampered := append(data[:len(data)-10], []byte(`"tampered"}`)...)
+	tampered := make([]byte, len(data)-10)
+	copy(tampered, data[:len(data)-10])
+	tampered = append(tampered, []byte(`"tampered"}`)...)
 	_ = os.WriteFile(baselinePath, tampered, 0600)
 
 	// Load should fail integrity check
