@@ -49,6 +49,17 @@ type Engine struct {
 	onRequest    func(*Request) // Callback when new request created
 	totpVerify   func(code string) bool
 	sessionValid func() bool
+
+	// Rate limiting state
+	rateLimiter *RateLimiter
+}
+
+// RateLimiter tracks TOTP attempt rates.
+type RateLimiter struct {
+	mu              sync.Mutex
+	attempts        []time.Time // Recent attempts within window
+	consecutiveFail int         // Consecutive failures
+	lockedUntil     time.Time   // Lockout expiry (zero if not locked)
 }
 
 // Config holds gate engine configuration.
