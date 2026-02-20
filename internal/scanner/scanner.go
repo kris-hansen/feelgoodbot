@@ -129,7 +129,7 @@ func HashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
@@ -296,20 +296,21 @@ func (s *Scanner) Scan() *ScanResult {
 		// Check if we should verify codesign (only for binaries)
 		checkCodesign := ind.Category == "system_binaries" || ind.Category == "apps"
 
-		if info.IsDir() && ind.Recursive {
+		switch {
+		case info.IsDir() && ind.Recursive:
 			files, errs := s.ScanDirectory(ind.Path, checkCodesign)
 			result.Errors = append(result.Errors, errs...)
 			for path, fileInfo := range files {
 				result.Files[path] = fileInfo
 			}
-		} else if !info.IsDir() {
+		case !info.IsDir():
 			fileInfo, err := ScanFile(ind.Path, checkCodesign)
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", ind.Path, err))
 				continue
 			}
 			result.Files[ind.Path] = fileInfo
-		} else if info.IsDir() && !ind.Recursive {
+		case info.IsDir() && !ind.Recursive:
 			// Non-recursive directory - just list top level
 			entries, err := os.ReadDir(ind.Path)
 			if err != nil {
@@ -362,7 +363,8 @@ func Compare(baseline, current map[string]*FileInfo) []Change {
 		}
 
 		// Check for modifications
-		if baseInfo.Hash != curInfo.Hash && baseInfo.Hash != "" && curInfo.Hash != "" {
+		switch {
+		case baseInfo.Hash != curInfo.Hash && baseInfo.Hash != "" && curInfo.Hash != "":
 			changes = append(changes, Change{
 				Path:        path,
 				Type:        "modified",
@@ -373,7 +375,7 @@ func Compare(baseline, current map[string]*FileInfo) []Change {
 				Details:     "content changed (hash mismatch)",
 				Description: fmt.Sprintf("File modified: %s", path),
 			})
-		} else if baseInfo.Mode != curInfo.Mode {
+		case baseInfo.Mode != curInfo.Mode:
 			changes = append(changes, Change{
 				Path:        path,
 				Type:        "modified",
@@ -384,7 +386,7 @@ func Compare(baseline, current map[string]*FileInfo) []Change {
 				Details:     fmt.Sprintf("permissions changed: %o -> %o", baseInfo.Mode, curInfo.Mode),
 				Description: fmt.Sprintf("Permissions changed: %s", path),
 			})
-		} else if baseInfo.Owner != curInfo.Owner || baseInfo.Group != curInfo.Group {
+		case baseInfo.Owner != curInfo.Owner || baseInfo.Group != curInfo.Group:
 			changes = append(changes, Change{
 				Path:        path,
 				Type:        "modified",

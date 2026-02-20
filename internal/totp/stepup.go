@@ -12,9 +12,9 @@ import (
 
 // StepUpConfig defines which actions require step-up authentication
 type StepUpConfig struct {
-	RequireStepUp     []string      `json:"requireStepUp"`
-	SessionTTLMinutes int           `json:"sessionTTLMinutes"`
-	Enabled           bool          `json:"enabled"`
+	RequireStepUp     []string `json:"requireStepUp"`
+	SessionTTLMinutes int      `json:"sessionTTLMinutes"`
+	Enabled           bool     `json:"enabled"`
 }
 
 // DefaultStepUpConfig returns the default step-up configuration
@@ -98,7 +98,7 @@ func NewStepUpManager(opts ...StepUpOption) (*StepUpManager, error) {
 // loadStepUpConfig loads the step-up config from disk
 func loadStepUpConfig(configDir string) (*StepUpConfig, error) {
 	path := filepath.Join(configDir, "stepup-config.json")
-	
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func loadStepUpConfig(configDir string) (*StepUpConfig, error) {
 // SaveStepUpConfig saves the step-up config to disk
 func (sm *StepUpManager) SaveStepUpConfig(config *StepUpConfig) error {
 	path := filepath.Join(sm.configDir, "stepup-config.json")
-	
+
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to serialize config: %w", err)
@@ -259,7 +259,7 @@ func (sm *StepUpManager) AddAction(action string) error {
 func (sm *StepUpManager) RemoveAction(action string) error {
 	found := false
 	newActions := make([]string, 0, len(sm.config.RequireStepUp))
-	
+
 	for _, existing := range sm.config.RequireStepUp {
 		if existing == action {
 			found = true

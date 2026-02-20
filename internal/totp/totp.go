@@ -33,11 +33,11 @@ type Store struct {
 
 // TOTPData holds the encrypted TOTP configuration
 type TOTPData struct {
-	Secret       string    `json:"secret"`
-	AccountName  string    `json:"account_name"`
-	CreatedAt    time.Time `json:"created_at"`
-	BackupCodes  []string  `json:"backup_codes"`
-	UsedBackups  []string  `json:"used_backups"`
+	Secret      string    `json:"secret"`
+	AccountName string    `json:"account_name"`
+	CreatedAt   time.Time `json:"created_at"`
+	BackupCodes []string  `json:"backup_codes"`
+	UsedBackups []string  `json:"used_backups"`
 }
 
 // NewStore creates a new TOTP store
@@ -126,7 +126,7 @@ func GenerateQRCode(uri string) (string, error) {
 // Load reads the TOTP data from disk
 func (s *Store) Load() (*TOTPData, error) {
 	path := filepath.Join(s.configDir, "totp.json")
-	
+
 	fileData, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read TOTP data: %w", err)
@@ -143,7 +143,7 @@ func (s *Store) Load() (*TOTPData, error) {
 // save writes the TOTP data to disk
 func (s *Store) save(data *TOTPData) error {
 	path := filepath.Join(s.configDir, "totp.json")
-	
+
 	jsonData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to serialize TOTP data: %w", err)
@@ -196,11 +196,11 @@ func (s *Store) Reset() error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove TOTP data: %w", err)
 	}
-	
+
 	// Also clear session
 	sessionPath := filepath.Join(s.configDir, "totp-session")
 	_ = os.Remove(sessionPath)
-	
+
 	return nil
 }
 

@@ -96,7 +96,7 @@ func (sm *SessionManager) TimeRemaining() time.Duration {
 // load reads the session from disk
 func (sm *SessionManager) load() (*Session, error) {
 	path := sm.sessionPath()
-	
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -113,7 +113,7 @@ func (sm *SessionManager) load() (*Session, error) {
 // save writes the session to disk
 func (sm *SessionManager) save(session *Session) error {
 	path := sm.sessionPath()
-	
+
 	data, err := json.Marshal(session)
 	if err != nil {
 		return fmt.Errorf("failed to serialize session: %w", err)

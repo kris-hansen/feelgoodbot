@@ -119,7 +119,7 @@ func (a *Alerter) sendClawdbot(alert Alert) error {
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
@@ -145,11 +145,12 @@ func formatAlertMessage(alert Alert) string {
 	}
 
 	// Header
-	if critical > 0 {
+	switch {
+	case critical > 0:
 		sb.WriteString(fmt.Sprintf("🚨 **CRITICAL: %d file(s) tampered on %s!**\n\n", critical, alert.Hostname))
-	} else if warning > 0 {
+	case warning > 0:
 		sb.WriteString(fmt.Sprintf("⚠️ **WARNING: %d suspicious change(s) on %s**\n\n", warning, alert.Hostname))
-	} else {
+	default:
 		sb.WriteString(fmt.Sprintf("ℹ️ **%d change(s) detected on %s**\n\n", len(alert.Changes), alert.Hostname))
 	}
 
@@ -243,7 +244,7 @@ func (a *Alerter) sendSlack(alert Alert) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	return nil
 }
