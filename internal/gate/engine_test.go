@@ -275,16 +275,16 @@ func TestStats(t *testing.T) {
 
 	stats := e.Stats()
 
-	if stats["pending_requests"].(int) != 1 {
+	if pending, ok := stats["pending_requests"].(int); !ok || pending != 1 {
 		t.Errorf("pending_requests = %v, want 1", stats["pending_requests"])
 	}
-	if stats["approved_total"].(int) != 1 {
+	if approved, ok := stats["approved_total"].(int); !ok || approved != 1 {
 		t.Errorf("approved_total = %v, want 1", stats["approved_total"])
 	}
-	if stats["denied_total"].(int) != 1 {
+	if denied, ok := stats["denied_total"].(int); !ok || denied != 1 {
 		t.Errorf("denied_total = %v, want 1", stats["denied_total"])
 	}
-	if stats["active_tokens"].(int) != 1 {
+	if tokens, ok := stats["active_tokens"].(int); !ok || tokens != 1 {
 		t.Errorf("active_tokens = %v, want 1", stats["active_tokens"])
 	}
 
