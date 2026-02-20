@@ -43,7 +43,7 @@ func TestSendAlert(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ok": true}`))
+		_, _ = w.Write([]byte(`{"ok": true}`))
 	}))
 	defer server.Close()
 
@@ -85,7 +85,7 @@ func TestSendAlert(t *testing.T) {
 func TestSendScanResult(t *testing.T) {
 	var receivedPayload map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&receivedPayload)
+		_ = json.NewDecoder(r.Body).Decode(&receivedPayload)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -159,7 +159,7 @@ func TestRequestGate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Return approval response
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"approved": true, "approved_by": "kris", "token": "abc123"}`))
+		_, _ = w.Write([]byte(`{"approved": true, "approved_by": "kris", "token": "abc123"}`))
 	}))
 	defer server.Close()
 
@@ -187,7 +187,7 @@ func TestRequestGate(t *testing.T) {
 func TestWebhookError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error": "server error"}`))
+		_, _ = w.Write([]byte(`{"error": "server error"}`))
 	}))
 	defer server.Close()
 
