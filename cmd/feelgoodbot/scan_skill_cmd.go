@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kris-hansen/feelgoodbot/internal/clawdbot"
 	"github.com/kris-hansen/feelgoodbot/internal/mdscanner"
 )
 
@@ -16,6 +17,7 @@ var scanSkillJSON bool
 var scanSkillQuiet bool
 var scanSkillStrict bool
 var scanSkillAIReview bool
+var scanSkillNotify bool
 
 // scanSkillCmd scans an entire skill directory for threats
 var scanSkillCmd = &cobra.Command{
@@ -45,6 +47,7 @@ Examples:
   feelgoodbot scan-skill ~/skills/twitter-bot --json
   feelgoodbot scan-skill /path/to/skill --strict
   feelgoodbot scan-skill ./suspicious-skill --ai-review
+  feelgoodbot scan-skill ./skill --notify  # Alert Clawdbot
 
 Exit codes:
   0 - Clean (no findings)
@@ -55,7 +58,8 @@ Flags:
   --json       Output detailed JSON results
   --quiet      Only output if issues found
   --strict     Exit 1 on any high/critical findings (CI mode)
-  --ai-review  Use AI (Claude) for deep analysis of suspicious patterns`,
+  --ai-review  Use AI (Claude) for deep analysis of suspicious patterns
+  --notify     Send results to Clawdbot (requires CLAWDBOT_WEBHOOK_URL)`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skillPath := args[0]
@@ -94,6 +98,13 @@ Flags:
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "⚠️  AI review failed: %v\n\n", err)
 				// Continue with static results
+			}
+		}
+
+		// Send notification to Clawdbot if requested
+		if scanSkillNotify {
+			if err := notifyClawdbot(skillPath, result, aiResult); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Clawdbot notification failed: %v\n", err)
 			}
 		}
 
@@ -198,6 +209,27 @@ func performAIReview(skillPath string, staticResult *mdscanner.SkillScanResult) 
 	return result, nil
 }
 
+func notifyClawdbot(skillPath string, result *mdscanner.SkillScanResult, aiResult *mdscanner.AIAnalysisResult) error {
+	notifier, err := clawdbot.NewNotifier(nil)
+	if err != nil {
+		return err
+	}
+
+	summary := ""
+	if aiResult != nil {
+		summary = aiResult.Summary
+	}
+
+	return notifier.SendScanResult(
+		skillPath,
+		result.Clean,
+		result.TotalIssues,
+		result.Critical,
+		result.High,
+		summary,
+	)
+}
+
 // logSkillScanResult logs the skill scan result to audit trail
 func logSkillScanResult(path string, result *mdscanner.SkillScanResult) {
 	status := "clean"
@@ -223,6 +255,7 @@ func init() {
 	scanSkillCmd.Flags().BoolVar(&scanSkillQuiet, "quiet", false, "Only output if issues found")
 	scanSkillCmd.Flags().BoolVar(&scanSkillStrict, "strict", false, "Exit 1 on critical/high findings (CI mode)")
 	scanSkillCmd.Flags().BoolVar(&scanSkillAIReview, "ai-review", false, "Use AI (Claude) for deep analysis")
+	scanSkillCmd.Flags().BoolVar(&scanSkillNotify, "notify", false, "Send results to Clawdbot")
 
 	rootCmd.AddCommand(scanSkillCmd)
 }
