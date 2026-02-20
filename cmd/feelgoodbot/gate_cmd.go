@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -84,7 +85,7 @@ Examples:
 		}
 
 		if !result.Success {
-			return fmt.Errorf(result.Error)
+			return errors.New(result.Error)
 		}
 
 		// If already approved (session was valid), return token
@@ -166,7 +167,7 @@ var gateDenyCmd = &cobra.Command{
 		_ = json.Unmarshal(resp, &result)
 
 		if !result.Success {
-			return fmt.Errorf(result.Error)
+			return errors.New(result.Error)
 		}
 
 		fmt.Println("❌ Request denied")
@@ -201,7 +202,7 @@ var gateStatusCmd = &cobra.Command{
 		_ = json.Unmarshal(resp, &result)
 
 		if !result.Success {
-			return fmt.Errorf(result.Error)
+			return errors.New(result.Error)
 		}
 
 		fmt.Printf("Request: %s\n", result.Data.ID)
@@ -291,7 +292,7 @@ Examples:
 		_ = json.Unmarshal(resp, &result)
 
 		if !result.Success {
-			return fmt.Errorf(result.Error)
+			return errors.New(result.Error)
 		}
 
 		if gateRevokeAll {
@@ -384,7 +385,7 @@ func approveRequest(requestID, code string) error {
 	_ = json.Unmarshal(resp, &result)
 
 	if !result.Success {
-		return fmt.Errorf(result.Error)
+		return errors.New(result.Error)
 	}
 
 	fmt.Println("✅ Approved")

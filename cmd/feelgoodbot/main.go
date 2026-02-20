@@ -853,7 +853,7 @@ This command must be run from the CLI (not remotely) for security.`,
 			// Remove the setup since verification failed
 			_ = store.Reset()
 			fmt.Println()
-			fmt.Println("❌ Invalid code. TOTP setup cancelled.")
+			fmt.Println("❌ Invalid code. TOTP setup canceled.")
 			fmt.Println("   Please run 'feelgoodbot totp init' again.")
 			return nil
 		}
@@ -948,7 +948,7 @@ After reset, you can run 'feelgoodbot totp init' to set up a new secret.`,
 		}
 
 		if !valid {
-			fmt.Println("❌ Invalid code. Reset cancelled.")
+			fmt.Println("❌ Invalid code. Reset canceled.")
 			return nil
 		}
 
