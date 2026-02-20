@@ -98,7 +98,10 @@ func TestSendScanResult(t *testing.T) {
 		t.Fatalf("SendScanResult failed: %v", err)
 	}
 
-	data := receivedPayload["data"].(map[string]interface{})
+	data, ok := receivedPayload["data"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected data object in payload")
+	}
 	if data["severity"] != "critical" {
 		t.Errorf("expected severity critical, got %v", data["severity"])
 	}
@@ -109,7 +112,10 @@ func TestSendScanResult(t *testing.T) {
 		t.Fatalf("SendScanResult failed: %v", err)
 	}
 
-	data = receivedPayload["data"].(map[string]interface{})
+	data, ok = receivedPayload["data"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected data object in payload")
+	}
 	if data["severity"] != "info" {
 		t.Errorf("expected severity info for clean scan, got %v", data["severity"])
 	}
