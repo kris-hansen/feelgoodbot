@@ -368,7 +368,7 @@ var daemonUninstallCmd = &cobra.Command{
 		// Stop first if running
 		uid := os.Getuid()
 		domain := fmt.Sprintf("gui/%d", uid)
-		
+
 		listOutput, _ := exec.Command("launchctl", "list", "com.feelgoodbot.daemon").CombinedOutput()
 		if strings.Contains(string(listOutput), "com.feelgoodbot.daemon") {
 			fmt.Println("   Stopping daemon...")
@@ -421,12 +421,12 @@ var daemonStartCmd = &cobra.Command{
 		// Bootstrap the service (modern launchctl)
 		domain := fmt.Sprintf("gui/%d", uid)
 		_ = exec.Command("launchctl", "bootout", domain+"/com.feelgoodbot.daemon").Run() // Ignore error
-		output, err := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput()
+		err := exec.Command("launchctl", "bootstrap", domain, plistPath).Run()
 		if err != nil {
 			// Fall back to legacy load for older macOS
-			output, err = exec.Command("launchctl", "load", plistPath).CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("failed to start daemon: %w\n%s", err, output)
+			output, loadErr := exec.Command("launchctl", "load", plistPath).CombinedOutput()
+			if loadErr != nil {
+				return fmt.Errorf("failed to start daemon: %w\n%s", loadErr, output)
 			}
 		}
 
