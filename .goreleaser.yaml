@@ -1,0 +1,64 @@
+version: 2
+
+project_name: feelgoodbot
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: feelgoodbot
+    main: ./cmd/feelgoodbot
+    binary: feelgoodbot
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.buildDate={{.Date}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - name: feelgoodbot
+    repository:
+      owner: kris-hansen
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://feelgoodbot.com"
+    description: "Malware detection for macOS - know when you've been compromised"
+    license: "MIT"
+    install: |
+      bin.install "feelgoodbot"
+    test: |
+      system "#{bin}/feelgoodbot", "version"
+
+release:
+  github:
+    owner: kris-hansen
+    name: feelgoodbot
+  draft: false
+  prerelease: auto
