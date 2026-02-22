@@ -21,7 +21,11 @@ import (
 	"github.com/kris-hansen/feelgoodbot/pkg/indicators"
 )
 
-var version = "0.1.0-dev"
+var (
+	version   = "0.1.0-dev"
+	commit    = "unknown"
+	buildDate = "unknown"
+)
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
@@ -61,6 +65,22 @@ func init() {
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(indicatorsCmd)
 	rootCmd.AddCommand(totpCmd)
+	rootCmd.AddCommand(versionCmd)
+}
+
+// version command - show version info
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Show version information",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("feelgoodbot %s\n", version)
+		if commit != "unknown" {
+			fmt.Printf("  commit:  %s\n", commit)
+		}
+		if buildDate != "unknown" {
+			fmt.Printf("  built:   %s\n", buildDate)
+		}
+	},
 }
 
 // init command - create initial baseline
