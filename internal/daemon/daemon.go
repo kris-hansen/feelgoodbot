@@ -332,9 +332,16 @@ func LaunchdPlistPath() string {
 func Install(binaryPath string, scanInterval time.Duration) error {
 	plistPath := LaunchdPlistPath()
 
-	// Ensure directory exists
+	// Ensure LaunchAgents directory exists
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0755); err != nil {
 		return fmt.Errorf("failed to create LaunchAgents directory: %w", err)
+	}
+
+	// Ensure config/log directory exists (launchd won't create it)
+	home, _ := os.UserHomeDir()
+	configDir := filepath.Join(home, ".config", "feelgoodbot")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	// Write plist

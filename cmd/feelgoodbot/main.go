@@ -366,10 +366,18 @@ var daemonUninstallCmd = &cobra.Command{
 		fmt.Println("🗑️  Uninstalling feelgoodbot daemon...")
 
 		// Stop first if running
-		status := daemon.GetStatus("")
-		if status.Running {
+		uid := os.Getuid()
+		domain := fmt.Sprintf("gui/%d", uid)
+		
+		listOutput, _ := exec.Command("launchctl", "list", "com.feelgoodbot.daemon").CombinedOutput()
+		if strings.Contains(string(listOutput), "com.feelgoodbot.daemon") {
 			fmt.Println("   Stopping daemon...")
-			_ = exec.Command("launchctl", "unload", daemon.LaunchdPlistPath()).Run()
+			// Try modern bootout first
+			err := exec.Command("launchctl", "bootout", domain+"/com.feelgoodbot.daemon").Run()
+			if err != nil {
+				// Fall back to legacy unload
+				_ = exec.Command("launchctl", "unload", daemon.LaunchdPlistPath()).Run()
+			}
 		}
 
 		if err := daemon.Uninstall(); err != nil {
@@ -392,29 +400,59 @@ var daemonStartCmd = &cobra.Command{
 			return nil
 		}
 
-		// Check if already running
-		status := daemon.GetStatus("")
-		if status.Running {
-			fmt.Printf("ℹ️  Daemon already running (PID %d)\n", status.PID)
+		// Ensure config directory exists (in case install was done with older version)
+		home, _ := os.UserHomeDir()
+		configDir := filepath.Join(home, ".config", "feelgoodbot")
+		if err := os.MkdirAll(configDir, 0700); err != nil {
+			fmt.Printf("⚠️  Warning: could not create config directory: %v\n", err)
+		}
+
+		// Check if already running via launchctl
+		uid := os.Getuid()
+		listOutput, _ := exec.Command("launchctl", "list", "com.feelgoodbot.daemon").CombinedOutput()
+		if strings.Contains(string(listOutput), "\"PID\"") {
+			// Extract PID from output
+			fmt.Println("ℹ️  Daemon already running")
 			return nil
 		}
 
 		fmt.Println("🚀 Starting feelgoodbot daemon...")
 
-		// Load via launchctl
-		output, err := exec.Command("launchctl", "load", plistPath).CombinedOutput()
+		// Bootstrap the service (modern launchctl)
+		domain := fmt.Sprintf("gui/%d", uid)
+		_ = exec.Command("launchctl", "bootout", domain+"/com.feelgoodbot.daemon").Run() // Ignore error
+		output, err := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("failed to start daemon: %w\n%s", err, output)
+			// Fall back to legacy load for older macOS
+			output, err = exec.Command("launchctl", "load", plistPath).CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to start daemon: %w\n%s", err, output)
+			}
 		}
 
-		// Wait a moment and check status
-		time.Sleep(500 * time.Millisecond)
-		status = daemon.GetStatus("")
-		if status.Running {
-			fmt.Printf("✅ Daemon started (PID %d)\n", status.PID)
+		// Kickstart to ensure immediate start
+		_ = exec.Command("launchctl", "kickstart", "-k", domain+"/com.feelgoodbot.daemon").Run()
+
+		// Wait and verify via launchctl list
+		time.Sleep(1 * time.Second)
+		listOutput, _ = exec.Command("launchctl", "list", "com.feelgoodbot.daemon").CombinedOutput()
+		if strings.Contains(string(listOutput), "\"PID\"") {
+			fmt.Println("✅ Daemon started successfully")
 		} else {
-			fmt.Println("⚠️  Daemon may have failed to start. Check logs:")
-			fmt.Println("   ~/.config/feelgoodbot/daemon.log")
+			// Check for errors in stderr log
+			errLog := filepath.Join(configDir, "daemon.err")
+			if errData, err := os.ReadFile(errLog); err == nil && len(errData) > 0 {
+				fmt.Println("⚠️  Daemon may have failed. Error log:")
+				lines := strings.Split(string(errData), "\n")
+				for i := len(lines) - 1; i >= 0 && i >= len(lines)-5; i-- {
+					if lines[i] != "" {
+						fmt.Printf("   %s\n", lines[i])
+					}
+				}
+			} else {
+				fmt.Println("⚠️  Daemon may have failed to start. Check logs:")
+				fmt.Println("   ~/.config/feelgoodbot/daemon.log")
+			}
 		}
 
 		return nil
@@ -425,23 +463,24 @@ var daemonStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the monitoring daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		status := daemon.GetStatus("")
-		if !status.Running {
+		// Check if running via launchctl
+		listOutput, _ := exec.Command("launchctl", "list", "com.feelgoodbot.daemon").CombinedOutput()
+		if !strings.Contains(string(listOutput), "\"PID\"") && !strings.Contains(string(listOutput), "com.feelgoodbot.daemon") {
 			fmt.Println("ℹ️  Daemon is not running")
 			return nil
 		}
 
 		fmt.Println("🛑 Stopping feelgoodbot daemon...")
 
-		plistPath := daemon.LaunchdPlistPath()
-		if _, err := os.Stat(plistPath); err == nil {
-			// Unload via launchctl
+		uid := os.Getuid()
+		domain := fmt.Sprintf("gui/%d", uid)
+
+		// Try modern bootout first
+		err := exec.Command("launchctl", "bootout", domain+"/com.feelgoodbot.daemon").Run()
+		if err != nil {
+			// Fall back to legacy unload
+			plistPath := daemon.LaunchdPlistPath()
 			_ = exec.Command("launchctl", "unload", plistPath).Run()
-		} else {
-			// Kill directly
-			if p, err := os.FindProcess(status.PID); err == nil {
-				_ = p.Signal(os.Interrupt)
-			}
 		}
 
 		fmt.Println("✅ Daemon stopped")
