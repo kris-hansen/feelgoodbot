@@ -3,6 +3,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,7 +15,10 @@ import (
 	"time"
 
 	"github.com/kris-hansen/feelgoodbot/internal/alerts"
+	"github.com/kris-hansen/feelgoodbot/internal/gate"
+	"github.com/kris-hansen/feelgoodbot/internal/logging"
 	"github.com/kris-hansen/feelgoodbot/internal/scanner"
+	"github.com/kris-hansen/feelgoodbot/internal/server"
 	"github.com/kris-hansen/feelgoodbot/internal/snapshot"
 )
 
@@ -40,12 +45,16 @@ func DefaultConfig() Config {
 
 // Daemon runs continuous file integrity monitoring
 type Daemon struct {
-	config   Config
-	store    *snapshot.Store
-	scanner  *scanner.Scanner
-	alerter  *alerts.Alerter
-	logger   *log.Logger
-	stopChan chan struct{}
+	config     Config
+	store      *snapshot.Store
+	scanner    *scanner.Scanner
+	alerter    *alerts.Alerter
+	logger     *log.Logger
+	stopChan   chan struct{}
+	server     *server.Server
+	gate       *gate.Engine
+	secureLog  *logging.SecureLog
+	socketPath string
 }
 
 // New creates a new daemon instance
@@ -72,14 +81,76 @@ func New(cfg Config) (*Daemon, error) {
 		logger = log.New(os.Stdout, "[feelgoodbot] ", log.LstdFlags)
 	}
 
+	home, _ := os.UserHomeDir()
+	configDir := filepath.Join(home, ".config", "feelgoodbot")
+
+	// Initialize gate engine
+	gateEngine := gate.NewEngine(nil)
+
+	// Initialize secure log
+	logSecret, err := loadOrCreateLogSecret(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize log secret: %w", err)
+	}
+	secureLogPath := filepath.Join(configDir, "secure.log")
+	secureLog, err := logging.NewSecureLog(secureLogPath, logSecret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secure log: %w", err)
+	}
+
+	// Initialize API server
+	socketPath := filepath.Join(configDir, "daemon.sock")
+	srv := server.New(&server.Config{
+		SocketPath: socketPath,
+		Gate:       gateEngine,
+		Log:        secureLog,
+	})
+
 	return &Daemon{
-		config:   cfg,
-		store:    store,
-		scanner:  scanner.New(),
-		alerter:  alerts.NewAlerter(cfg.AlertConfig),
-		logger:   logger,
-		stopChan: make(chan struct{}),
+		config:     cfg,
+		store:      store,
+		scanner:    scanner.New(),
+		alerter:    alerts.NewAlerter(cfg.AlertConfig),
+		logger:     logger,
+		stopChan:   make(chan struct{}),
+		server:     srv,
+		gate:       gateEngine,
+		secureLog:  secureLog,
+		socketPath: socketPath,
 	}, nil
+}
+
+// loadOrCreateLogSecret loads the log HMAC secret or creates a new one
+func loadOrCreateLogSecret(configDir string) ([]byte, error) {
+	secretPath := filepath.Join(configDir, "log_secret")
+
+	// Try to load existing secret
+	if data, err := os.ReadFile(secretPath); err == nil && len(data) == 64 {
+		secret := make([]byte, 32)
+		if _, err := hex.Decode(secret, data); err == nil {
+			return secret, nil
+		}
+	}
+
+	// Generate new secret
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, fmt.Errorf("failed to generate secret: %w", err)
+	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Save secret
+	encoded := make([]byte, 64)
+	hex.Encode(encoded, secret)
+	if err := os.WriteFile(secretPath, encoded, 0600); err != nil {
+		return nil, fmt.Errorf("failed to save secret: %w", err)
+	}
+
+	return secret, nil
 }
 
 // Run starts the daemon and blocks until stopped
@@ -94,6 +165,22 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.logger.Printf("Warning: failed to write PID file: %v", err)
 	}
 	defer d.removePidFile()
+
+	// Start API server in background
+	serverErrChan := make(chan error, 1)
+	go func() {
+		d.logger.Printf("Starting API server on %s", d.socketPath)
+		if err := d.server.Start(); err != nil {
+			d.logger.Printf("API server error: %v", err)
+			serverErrChan <- err
+		}
+	}()
+	defer func() {
+		d.logger.Println("Stopping API server")
+		_ = d.server.Stop()
+		// Clean up socket file
+		_ = os.Remove(d.socketPath)
+	}()
 
 	d.logger.Printf("Daemon started (scan interval: %s)", d.config.ScanInterval)
 
@@ -112,6 +199,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		select {
 		case <-ticker.C:
 			d.runScan()
+		case err := <-serverErrChan:
+			d.logger.Printf("API server failed: %v", err)
+			return fmt.Errorf("API server failed: %w", err)
 		case <-sigChan:
 			d.logger.Println("Received shutdown signal")
 			return nil
