@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -128,14 +129,36 @@ func (a *Alerter) sendClawdbot(alert Alert) error {
 	return nil
 }
 
+// deduplicateChanges removes duplicate entries for the same path, keeping the highest severity
+func deduplicateChanges(changes []scanner.Change) []scanner.Change {
+	seen := make(map[string]int) // path -> index in result
+	result := make([]scanner.Change, 0, len(changes))
+
+	for _, c := range changes {
+		if idx, exists := seen[c.Path]; exists {
+			// Keep the higher severity one
+			if c.Severity > result[idx].Severity {
+				result[idx] = c
+			}
+		} else {
+			seen[c.Path] = len(result)
+			result = append(result, c)
+		}
+	}
+	return result
+}
+
 // formatAlertMessage builds a human-readable alert message
 func formatAlertMessage(alert Alert) string {
 	var sb strings.Builder
 
+	// Deduplicate changes
+	changes := deduplicateChanges(alert.Changes)
+
 	// Count by severity
 	critical := 0
 	warning := 0
-	for _, c := range alert.Changes {
+	for _, c := range changes {
 		switch c.Severity {
 		case scanner.SeverityCritical:
 			critical++
@@ -151,30 +174,65 @@ func formatAlertMessage(alert Alert) string {
 	case warning > 0:
 		sb.WriteString(fmt.Sprintf("⚠️ **WARNING: %d suspicious change(s) on %s**\n\n", warning, alert.Hostname))
 	default:
-		sb.WriteString(fmt.Sprintf("ℹ️ **%d change(s) detected on %s**\n\n", len(alert.Changes), alert.Hostname))
+		sb.WriteString(fmt.Sprintf("ℹ️ **%d change(s) detected on %s**\n\n", len(changes), alert.Hostname))
 	}
 
-	// List changes (limit to 10 for readability)
-	maxShow := 10
-	for i, c := range alert.Changes {
-		if i >= maxShow {
-			sb.WriteString(fmt.Sprintf("\n... and %d more files", len(alert.Changes)-maxShow))
-			break
-		}
-
-		emoji := "📄"
+	// Group changes by severity for cleaner presentation
+	var criticalChanges, warningChanges, otherChanges []scanner.Change
+	for _, c := range changes {
 		switch c.Severity {
 		case scanner.SeverityCritical:
-			emoji = "🔴"
+			criticalChanges = append(criticalChanges, c)
 		case scanner.SeverityWarning:
-			emoji = "🟡"
+			warningChanges = append(warningChanges, c)
+		default:
+			otherChanges = append(otherChanges, c)
 		}
+	}
 
-		sb.WriteString(fmt.Sprintf("%s `%s` (%s", emoji, c.Path, c.Type))
+	// Show critical first, then warnings, then others
+	maxShow := 10
+	shown := 0
+
+	for _, c := range criticalChanges {
+		if shown >= maxShow {
+			break
+		}
+		sb.WriteString(fmt.Sprintf("🔴 `%s` (%s", c.Path, c.Type))
 		if c.Category != "" {
 			sb.WriteString(fmt.Sprintf(", %s", c.Category))
 		}
 		sb.WriteString(")\n")
+		shown++
+	}
+
+	for _, c := range warningChanges {
+		if shown >= maxShow {
+			break
+		}
+		sb.WriteString(fmt.Sprintf("🟡 `%s` (%s", c.Path, c.Type))
+		if c.Category != "" {
+			sb.WriteString(fmt.Sprintf(", %s", c.Category))
+		}
+		sb.WriteString(")\n")
+		shown++
+	}
+
+	for _, c := range otherChanges {
+		if shown >= maxShow {
+			break
+		}
+		sb.WriteString(fmt.Sprintf("📄 `%s` (%s", c.Path, c.Type))
+		if c.Category != "" {
+			sb.WriteString(fmt.Sprintf(", %s", c.Category))
+		}
+		sb.WriteString(")\n")
+		shown++
+	}
+
+	remaining := len(changes) - shown
+	if remaining > 0 {
+		sb.WriteString(fmt.Sprintf("\n... and %d more files", remaining))
 	}
 
 	// Timestamp
@@ -185,6 +243,9 @@ func formatAlertMessage(alert Alert) string {
 
 // sendSlack sends alert to Slack webhook
 func (a *Alerter) sendSlack(alert Alert) error {
+	// Deduplicate changes
+	changes := deduplicateChanges(alert.Changes)
+
 	emoji := "ℹ️"
 	color := "#36a64f"
 
@@ -199,9 +260,9 @@ func (a *Alerter) sendSlack(alert Alert) error {
 
 	// Build file list
 	var fileList strings.Builder
-	for i, c := range alert.Changes {
+	for i, c := range changes {
 		if i >= 10 {
-			fileList.WriteString(fmt.Sprintf("\n... and %d more", len(alert.Changes)-10))
+			fileList.WriteString(fmt.Sprintf("\n... and %d more", len(changes)-10))
 			break
 		}
 		fileList.WriteString(fmt.Sprintf("• `%s` (%s)\n", c.Path, c.Type))
@@ -221,7 +282,7 @@ func (a *Alerter) sendSlack(alert Alert) error {
 					},
 					{
 						"title": "Changes",
-						"value": fmt.Sprintf("%d files", len(alert.Changes)),
+						"value": fmt.Sprintf("%d files", len(changes)),
 						"short": true,
 					},
 					{
@@ -251,32 +312,202 @@ func (a *Alerter) sendSlack(alert Alert) error {
 
 // sendLocalNotification uses macOS notification center
 func (a *Alerter) sendLocalNotification(alert Alert) error {
-	title := "feelgoodbot Alert"
+	// Deduplicate changes
+	changes := deduplicateChanges(alert.Changes)
 
-	switch alert.Severity {
-	case scanner.SeverityCritical:
-		title = "🚨 CRITICAL: System Tampering Detected"
-	case scanner.SeverityWarning:
-		title = "⚠️ Suspicious Changes Detected"
-	}
-
-	// Build message with top files
-	message := alert.Message
-	if len(alert.Changes) > 0 && len(message) < 200 {
-		message += "\n\nTop changes:"
-		for i, c := range alert.Changes {
-			if i >= 3 {
-				break
-			}
-			message += fmt.Sprintf("\n• %s", c.Path)
+	// Count by severity
+	critical := 0
+	warning := 0
+	for _, c := range changes {
+		switch c.Severity {
+		case scanner.SeverityCritical:
+			critical++
+		case scanner.SeverityWarning:
+			warning++
 		}
 	}
 
+	// Build title
+	title := "feelgoodbot"
+	subtitle := ""
+	switch {
+	case critical > 0:
+		subtitle = fmt.Sprintf("🚨 %d critical file(s) tampered!", critical)
+	case warning > 0:
+		subtitle = fmt.Sprintf("⚠️ %d suspicious change(s)", warning)
+	default:
+		subtitle = fmt.Sprintf("ℹ️ %d file(s) changed", len(changes))
+	}
+
+	// Build concise message showing just filenames (not full paths)
+	var msgParts []string
+	maxFiles := 5
+	for i, c := range changes {
+		if i >= maxFiles {
+			msgParts = append(msgParts, fmt.Sprintf("+%d more", len(changes)-maxFiles))
+			break
+		}
+		// Show just the filename for brevity
+		filename := filepath.Base(c.Path)
+		msgParts = append(msgParts, filename)
+	}
+	message := strings.Join(msgParts, ", ")
+
+	// Write detailed alert file for "Show" button
+	detailsPath := writeAlertDetails(alert, changes)
+
+	// Try terminal-notifier first (supports click actions)
+	if tnPath, err := exec.LookPath("terminal-notifier"); err == nil {
+		args := []string{
+			"-title", title,
+			"-subtitle", subtitle,
+			"-message", message,
+			"-sound", "Basso",
+			"-group", "feelgoodbot",
+		}
+		if detailsPath != "" {
+			args = append(args, "-open", "file://"+detailsPath)
+		}
+		cmd := exec.Command(tnPath, args...)
+		return cmd.Run()
+	}
+
+	// Fall back to osascript (basic notification)
+	fullMessage := subtitle + "\n" + message
 	script := fmt.Sprintf(`display notification %q with title %q sound name "Basso"`,
-		message, title)
+		fullMessage, title)
 
 	cmd := exec.Command("osascript", "-e", script)
 	return cmd.Run()
+}
+
+// writeAlertDetails writes full alert details to a file and returns the path
+func writeAlertDetails(alert Alert, changes []scanner.Change) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	alertsDir := filepath.Join(home, ".config", "feelgoodbot", "alerts")
+	if err := os.MkdirAll(alertsDir, 0700); err != nil {
+		return ""
+	}
+
+	filename := fmt.Sprintf("alert_%s.txt", alert.Timestamp.Format("2006-01-02_15-04-05"))
+	filePath := filepath.Join(alertsDir, filename)
+
+	var sb strings.Builder
+	sb.WriteString("═══════════════════════════════════════════════════════════════\n")
+	sb.WriteString("                    FEELGOODBOT ALERT DETAILS\n")
+	sb.WriteString("═══════════════════════════════════════════════════════════════\n\n")
+
+	sb.WriteString(fmt.Sprintf("Time:     %s\n", alert.Timestamp.Format("2006-01-02 15:04:05 MST")))
+	sb.WriteString(fmt.Sprintf("Host:     %s\n", alert.Hostname))
+	sb.WriteString(fmt.Sprintf("Severity: %s\n", alert.Severity.String()))
+	sb.WriteString(fmt.Sprintf("Files:    %d changed\n", len(changes)))
+
+	// Count by severity
+	critical := 0
+	warning := 0
+	for _, c := range changes {
+		switch c.Severity {
+		case scanner.SeverityCritical:
+			critical++
+		case scanner.SeverityWarning:
+			warning++
+		}
+	}
+	if critical > 0 {
+		sb.WriteString(fmt.Sprintf("          └─ %d CRITICAL\n", critical))
+	}
+	if warning > 0 {
+		sb.WriteString(fmt.Sprintf("          └─ %d warning\n", warning))
+	}
+
+	sb.WriteString("\n───────────────────────────────────────────────────────────────\n")
+	sb.WriteString("                         CHANGED FILES\n")
+	sb.WriteString("───────────────────────────────────────────────────────────────\n\n")
+
+	// Group by severity
+	var criticalChanges, warningChanges, otherChanges []scanner.Change
+	for _, c := range changes {
+		switch c.Severity {
+		case scanner.SeverityCritical:
+			criticalChanges = append(criticalChanges, c)
+		case scanner.SeverityWarning:
+			warningChanges = append(warningChanges, c)
+		default:
+			otherChanges = append(otherChanges, c)
+		}
+	}
+
+	if len(criticalChanges) > 0 {
+		sb.WriteString("🔴 CRITICAL:\n")
+		for _, c := range criticalChanges {
+			writeChangeDetail(&sb, c)
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(warningChanges) > 0 {
+		sb.WriteString("🟡 WARNING:\n")
+		for _, c := range warningChanges {
+			writeChangeDetail(&sb, c)
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(otherChanges) > 0 {
+		sb.WriteString("📄 OTHER:\n")
+		for _, c := range otherChanges {
+			writeChangeDetail(&sb, c)
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("───────────────────────────────────────────────────────────────\n")
+	sb.WriteString("To investigate:\n")
+	sb.WriteString("  • Run: feelgoodbot scan --verbose\n")
+	sb.WriteString("  • Check: ~/.config/feelgoodbot/diffs/\n")
+	sb.WriteString("───────────────────────────────────────────────────────────────\n")
+
+	if err := os.WriteFile(filePath, []byte(sb.String()), 0600); err != nil {
+		return ""
+	}
+
+	return filePath
+}
+
+// writeChangeDetail writes details for a single change
+func writeChangeDetail(sb *strings.Builder, c scanner.Change) {
+	sb.WriteString(fmt.Sprintf("   %s\n", c.Path))
+	sb.WriteString(fmt.Sprintf("      Type:     %s\n", c.Type))
+	if c.Category != "" {
+		sb.WriteString(fmt.Sprintf("      Category: %s\n", c.Category))
+	}
+	if c.Before != nil && c.After != nil {
+		if c.Before.Hash != c.After.Hash {
+			sb.WriteString(fmt.Sprintf("      Hash:     %s... → %s...\n", truncHash(c.Before.Hash), truncHash(c.After.Hash)))
+		}
+		if c.Before.Size != c.After.Size {
+			sb.WriteString(fmt.Sprintf("      Size:     %d → %d bytes\n", c.Before.Size, c.After.Size))
+		}
+		if c.Before.Mode != c.After.Mode {
+			sb.WriteString(fmt.Sprintf("      Mode:     %s → %s\n", c.Before.Mode, c.After.Mode))
+		}
+	} else if c.Before != nil {
+		sb.WriteString(fmt.Sprintf("      Was:      %d bytes, %s\n", c.Before.Size, truncHash(c.Before.Hash)))
+	} else if c.After != nil {
+		sb.WriteString(fmt.Sprintf("      Now:      %d bytes, %s\n", c.After.Size, truncHash(c.After.Hash)))
+	}
+}
+
+// truncHash truncates a hash for display
+func truncHash(hash string) string {
+	if len(hash) > 12 {
+		return hash[:12]
+	}
+	return hash
 }
 
 // Response actions
