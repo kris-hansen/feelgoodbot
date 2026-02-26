@@ -1,0 +1,62 @@
+name: Auto Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Only run if CI passed and this is a merge (not a direct push)
+    if: github.event.head_commit.message != '' && !contains(github.event.head_commit.message, '[skip-release]')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest tag
+        id: latest_tag
+        run: |
+          git fetch --tags
+          LATEST=$(git tag --sort=-v:refname | grep '^v' | head -1)
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.0.0"
+          fi
+          echo "tag=$LATEST" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST"
+
+      - name: Bump version
+        id: bump
+        run: |
+          LATEST="${{ steps.latest_tag.outputs.tag }}"
+          # Remove 'v' prefix
+          VERSION="${LATEST#v}"
+          # Split into parts
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          # Bump patch
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.bump.outputs.version }}
+          git push origin ${{ steps.bump.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger release
+        run: |
+          echo "Tag ${{ steps.bump.outputs.version }} pushed - release workflow will handle the rest"
