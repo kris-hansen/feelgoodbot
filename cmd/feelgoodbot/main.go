@@ -337,16 +337,10 @@ var daemonInstallCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install as a launchd service (runs on boot)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Get binary path
-		binaryPath, err := os.Executable()
+		// Get binary path - prefer stable symlink over versioned Cellar path
+		binaryPath, err := getStableBinaryPath()
 		if err != nil {
 			return fmt.Errorf("failed to get executable path: %w", err)
-		}
-
-		// Resolve symlinks
-		binaryPath, err = filepath.EvalSymlinks(binaryPath)
-		if err != nil {
-			return fmt.Errorf("failed to resolve binary path: %w", err)
 		}
 
 		// Parse interval
@@ -576,8 +570,36 @@ var daemonStatusCmd = &cobra.Command{
 
 		// Check if installed
 		plistPath := daemon.LaunchdPlistPath()
+		installed := false
 		if _, err := os.Stat(plistPath); err == nil {
+			installed = true
 			fmt.Println("   Service: ✓ Installed (runs on boot)")
+
+			// Check for version mismatch / broken path
+			if plistData, err := os.ReadFile(plistPath); err == nil {
+				plistStr := string(plistData)
+				// Extract binary path from plist
+				if strings.Contains(plistStr, "/Cellar/") {
+					// Find the Cellar path
+					start := strings.Index(plistStr, "/opt/homebrew/Cellar/")
+					if start == -1 {
+						start = strings.Index(plistStr, "/usr/local/Cellar/")
+					}
+					if start != -1 {
+						end := strings.Index(plistStr[start:], "</string>")
+						if end != -1 {
+							cellarPath := plistStr[start : start+end]
+							// Check if path exists
+							if _, err := os.Stat(cellarPath); os.IsNotExist(err) {
+								fmt.Println()
+								fmt.Println("   ⚠️  WARNING: Daemon configured with stale path!")
+								fmt.Printf("      Path: %s (does not exist)\n", cellarPath)
+								fmt.Println("      Run: feelgoodbot daemon uninstall && feelgoodbot daemon install")
+							}
+						}
+					}
+				}
+			}
 		} else {
 			fmt.Println("   Service: ✗ Not installed")
 		}
@@ -587,6 +609,15 @@ var daemonStatusCmd = &cobra.Command{
 		logPath := filepath.Join(home, ".config", "feelgoodbot", "daemon.log")
 		if info, err := os.Stat(logPath); err == nil {
 			fmt.Printf("   Log:     %s (%.1f KB)\n", logPath, float64(info.Size())/1024)
+		}
+
+		// Show CLI version
+		fmt.Printf("   CLI:     %s\n", version)
+
+		// Warn if daemon not installed after showing status
+		if !installed && status.Running {
+			fmt.Println()
+			fmt.Println("   ⚠️  Daemon running but not installed as service")
 		}
 
 		return nil
@@ -771,6 +802,46 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// getStableBinaryPath returns a stable path that survives Homebrew upgrades.
+// If running from Homebrew Cellar, returns the symlink path instead.
+func getStableBinaryPath() (string, error) {
+	binaryPath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+
+	// Resolve to actual path
+	resolvedPath, err := filepath.EvalSymlinks(binaryPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Check if this is a Homebrew Cellar path
+	// e.g., /opt/homebrew/Cellar/feelgoodbot/0.1.2/bin/feelgoodbot
+	if strings.Contains(resolvedPath, "/Cellar/") {
+		// Try to find the stable symlink in /opt/homebrew/bin
+		homebrewBin := "/opt/homebrew/bin/feelgoodbot"
+		if _, err := os.Stat(homebrewBin); err == nil {
+			// Verify it points to the same binary
+			symlinkTarget, err := filepath.EvalSymlinks(homebrewBin)
+			if err == nil && symlinkTarget == resolvedPath {
+				return homebrewBin, nil
+			}
+		}
+		// Also try /usr/local/bin for Intel Macs
+		usrLocalBin := "/usr/local/bin/feelgoodbot"
+		if _, err := os.Stat(usrLocalBin); err == nil {
+			symlinkTarget, err := filepath.EvalSymlinks(usrLocalBin)
+			if err == nil && symlinkTarget == resolvedPath {
+				return usrLocalBin, nil
+			}
+		}
+	}
+
+	// Fall back to resolved path if not Homebrew or symlink not found
+	return resolvedPath, nil
 }
 
 func formatCategory(cat string) string {
