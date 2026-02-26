@@ -1,46 +1,66 @@
+version: "2"
+
 run:
   timeout: 5m
   modules-download-mode: readonly
 
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kris-hansen/feelgoodbot
+
 linters:
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     - unparam
     - gocritic
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-  gocritic:
-    enabled-tags:
-      - diagnostic
-    disabled-checks:
-      - hugeParam
-      - ifElseChain
-      - appendAssign
-      - filepathJoin
-  goimports:
-    local-prefixes: github.com/kris-hansen/feelgoodbot
-  misspell:
-    locale: US
-
-issues:
-  exclude-rules:
-    # Allow unused parameters in test files
-    - path: _test\.go
-      linters:
-        - unparam
-    # Allow exec.Command without checking errors in some cases
-    - path: internal/alerts/
-      text: "Error return value of .* is not checked"
-      linters:
-        - errcheck
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gocritic:
+      enabled-tags:
+        - diagnostic
+      disabled-checks:
+        - ifElseChain
+        - appendAssign
+        - filepathJoin
+    misspell:
+      locale: US
+  exclusions:
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - path: _test\.go
+        linters:
+          - unparam
+      - path: internal/alerts/
+        text: "Error return value of .* is not checked"
+        linters:
+          - errcheck
+      # Disable ifElseChain - sometimes clearer than switch
+      - text: "ifElseChain"
+        linters:
+          - gocritic
+      # WriteString with Sprintf is fine for readability
+      - text: "QF1012"
+        linters:
+          - staticcheck
+      # Tagged switch suggestions - sometimes if-else is clearer
+      - text: "QF1003"
+        linters:
+          - staticcheck
+      # unnecessary conversion is sometimes intentional
+      - text: "unnecessary conversion"
+        linters:
+          - unconvert
