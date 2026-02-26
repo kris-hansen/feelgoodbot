@@ -86,6 +86,43 @@ feelgoodbot daemon start
 feelgoodbot status
 ```
 
+## Live Console 📺
+
+Monitor security alerts in real-time with the interactive TUI console:
+
+```bash
+# Start the live console
+feelgoodbot console
+```
+
+The console displays alerts as they happen and lets you take action immediately:
+
+```
+───────────────────────────────────────────────────────────────
+🟡 10:23:45 — 3 change(s) detected
+
+    1. 🟡 .zshrc (shell_config) modified
+    2. 🟡 claude_desktop_config.json (ai_agents) added
+    3. 🔴 authorized_keys (ssh) modified
+
+   i <n>  ignore    d <n>  details    I/D  all    h  help    q  dismiss
+```
+
+### Console Commands
+
+| Command | Description |
+|---------|-------------|
+| `i 3` | Ignore item 3 (add to permanent ignore list) |
+| `i 1,3,5` | Ignore multiple items |
+| `i 5-10` | Ignore a range of items |
+| `d 2` | Show details for item 2 (file info, preview) |
+| `I` | Ignore ALL items in this alert |
+| `D` | Show details for ALL items |
+| `h` | Show help |
+| `q` | Dismiss this alert |
+
+The console communicates with the daemon via Unix socket (`~/.config/feelgoodbot/feelgoodbot.sock`).
+
 ## Configuration
 
 ```yaml
