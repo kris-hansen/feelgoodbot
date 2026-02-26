@@ -81,6 +81,17 @@ func (a *Alerter) Send(alert Alert) error {
 		}
 	}
 
+	// Post Darwin distributed notification for console/TUI listeners
+	distAlert := ConvertToDistributedAlert(alert)
+	if err := PostDistributedNotification(distAlert); err != nil {
+		errs = append(errs, fmt.Errorf("distributed: %w", err))
+	}
+
+	// Also send via Unix socket for console
+	if err := SendToConsoleSocket(distAlert); err != nil {
+		errs = append(errs, fmt.Errorf("socket: %w", err))
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("some alerts failed: %v", errs)
 	}
