@@ -545,3 +545,46 @@ func FilterBySeverity(changes []Change, minSeverity Severity) []Change {
 	}
 	return filtered
 }
+
+// LoadIgnoreList reads the ignore list from ~/.config/feelgoodbot/ignore.txt
+func LoadIgnoreList() (map[string]bool, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	ignorePath := filepath.Join(home, ".config", "feelgoodbot", "ignore.txt")
+	ignored := make(map[string]bool)
+
+	data, err := os.ReadFile(ignorePath)
+	if os.IsNotExist(err) {
+		return ignored, nil // No ignore file is fine
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			ignored[line] = true
+		}
+	}
+
+	return ignored, nil
+}
+
+// FilterIgnored removes changes for paths in the ignore list
+func FilterIgnored(changes []Change, ignored map[string]bool) []Change {
+	if len(ignored) == 0 {
+		return changes
+	}
+
+	var filtered []Change
+	for _, c := range changes {
+		if !ignored[c.Path] {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
+}
