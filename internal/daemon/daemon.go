@@ -238,6 +238,18 @@ func (d *Daemon) runScan() {
 	// Compare with baseline
 	changes := scanner.Compare(baseline.Files, result.Files)
 
+	// Filter out ignored paths
+	ignored, err := scanner.LoadIgnoreList()
+	if err != nil {
+		d.logger.Printf("Warning: failed to load ignore list: %v", err)
+	} else if len(ignored) > 0 {
+		beforeCount := len(changes)
+		changes = scanner.FilterIgnored(changes, ignored)
+		if beforeCount != len(changes) {
+			d.logger.Printf("Filtered %d ignored path(s)", beforeCount-len(changes))
+		}
+	}
+
 	if len(changes) == 0 {
 		d.logger.Println("No changes detected")
 		return
