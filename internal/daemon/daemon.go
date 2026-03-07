@@ -303,6 +303,17 @@ func (d *Daemon) runScan() {
 			d.logger.Println("Alert sent successfully")
 		}
 
+		// Log to secure audit trail
+		severity := "warning"
+		if len(critical) > 0 {
+			severity = "critical"
+		}
+		_ = d.secureLog.LogIntegrity("file_changes_detected", severity, "daemon", map[string]string{
+			"total_changes": fmt.Sprintf("%d", len(changes)),
+			"critical":      fmt.Sprintf("%d", len(critical)),
+			"warnings":      fmt.Sprintf("%d", len(warnings)),
+		})
+
 		// Execute response actions for critical changes
 		if len(critical) > 0 {
 			d.logger.Println("CRITICAL changes detected - review immediately!")
