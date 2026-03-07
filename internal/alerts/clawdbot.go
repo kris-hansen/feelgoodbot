@@ -377,7 +377,11 @@ func (a *Alerter) sendLocalNotification(alert Alert) error {
 			"-group", "feelgoodbot",
 		}
 		if detailsPath != "" {
-			args = append(args, "-open", "file://"+detailsPath)
+			// Create a wrapper script to open Terminal with alert details
+			scriptPath := writeAlertScript(detailsPath)
+			if scriptPath != "" {
+				args = append(args, "-execute", scriptPath)
+			}
 		}
 		cmd := exec.Command(tnPath, args...)
 		return cmd.Run()
@@ -390,6 +394,33 @@ func (a *Alerter) sendLocalNotification(alert Alert) error {
 
 	cmd := exec.Command("osascript", "-e", script)
 	return cmd.Run()
+}
+
+// writeAlertScript creates a shell script that opens Terminal with alert details
+func writeAlertScript(detailsPath string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	scriptsDir := filepath.Join(home, ".config", "feelgoodbot", "scripts")
+	if err := os.MkdirAll(scriptsDir, 0700); err != nil {
+		return ""
+	}
+
+	scriptPath := filepath.Join(scriptsDir, "show_alert.sh")
+	script := fmt.Sprintf(`#!/bin/bash
+osascript -e 'tell application "Terminal"
+    activate
+    do script "clear && cat \"%s\" && echo \"\" && echo \"Press Enter to close...\" && read && exit"
+end tell'
+`, detailsPath)
+
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		return ""
+	}
+
+	return scriptPath
 }
 
 // writeAlertDetails writes full alert details to a file and returns the path
