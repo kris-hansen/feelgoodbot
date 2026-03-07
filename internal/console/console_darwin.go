@@ -131,6 +131,21 @@ func (c *Console) processAlerts() {
 	}
 }
 
+func (c *Console) clearScreen() {
+	// ANSI escape codes: clear screen and move cursor to top-left
+	fmt.Print("\033[2J\033[H")
+
+	// Redraw header
+	fmt.Println()
+	fmt.Println("\033[1m\033[36m╔══════════════════════════════════════════════════╗\033[0m")
+	fmt.Println("\033[1m\033[36m║  🛡️  FEELGOODBOT CONSOLE                         ║\033[0m")
+	fmt.Println("\033[1m\033[36m╚══════════════════════════════════════════════════╝\033[0m")
+	fmt.Println()
+	fmt.Printf("\033[90mListening for alerts... (Ctrl+C to exit)\033[0m\n")
+	fmt.Printf("\033[90mCleared: %s\033[0m\n", time.Now().Format("15:04:05"))
+	fmt.Println()
+}
+
 func (c *Console) displayAlert(alert Alert) {
 	reset := "\033[0m"
 	bold := "\033[1m"
@@ -165,7 +180,7 @@ func (c *Console) displayAlert(alert Alert) {
 	}
 
 	fmt.Println()
-	fmt.Printf("   %si <n>  ignore    d <n>  details    I/D  all    h  help    q  dismiss%s\n", gray, reset)
+	fmt.Printf("   %si <n>  ignore    d <n>  details    I/D  all    c  clear    h  help    q  dismiss%s\n", gray, reset)
 	fmt.Println()
 }
 
@@ -300,9 +315,14 @@ func (c *Console) handleInput(alert Alert) {
 			fmt.Printf("   %sd <n>%s     Details for item n (e.g., d 5)\n", bold, reset)
 			fmt.Printf("   %sI%s         Ignore ALL items\n", bold, reset)
 			fmt.Printf("   %sD%s         Details for ALL items\n", bold, reset)
+			fmt.Printf("   %sc%s         Clear screen and dismiss alert\n", bold, reset)
 			fmt.Printf("   %sq%s         Dismiss this alert\n", bold, reset)
 			fmt.Printf("   %sh%s         Show this help\n", bold, reset)
 			fmt.Println()
+
+		case "c", "clear":
+			c.clearScreen()
+			return
 
 		case "q", "quit", "exit":
 			return
