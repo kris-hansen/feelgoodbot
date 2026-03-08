@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Get latest tag
         id: latest_tag
@@ -55,7 +55,7 @@ jobs:
           git tag ${{ steps.bump.outputs.version }}
           git push origin ${{ steps.bump.outputs.version }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Trigger release
         run: |
