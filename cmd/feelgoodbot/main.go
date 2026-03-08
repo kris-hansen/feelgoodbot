@@ -56,6 +56,8 @@ Quick start:
 }
 
 func init() {
+	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "Overwrite existing baseline (use after OS upgrades)")
+
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(scanCmd)
 	rootCmd.AddCommand(snapshotCmd)
@@ -83,6 +85,8 @@ var versionCmd = &cobra.Command{
 	},
 }
 
+var initForce bool
+
 // init command - create initial baseline
 var initCmd = &cobra.Command{
 	Use:   "init",
@@ -98,10 +102,14 @@ var initCmd = &cobra.Command{
 		}
 
 		// Check if baseline already exists
-		if store.HasBaseline() {
-			fmt.Println("⚠️  Baseline already exists. Use 'feelgoodbot snapshot' to update it.")
-			fmt.Println("   Or delete ~/.config/feelgoodbot/snapshots/baseline.json to reinitialize.")
+		if store.HasBaseline() && !initForce {
+			fmt.Println("⚠️  Baseline already exists. Use --force to overwrite.")
+			fmt.Println("   Or use 'feelgoodbot snapshot' for incremental updates.")
 			return nil
+		}
+
+		if store.HasBaseline() && initForce {
+			fmt.Println("🔄 Replacing existing baseline...")
 		}
 
 		// Create scanner and perform initial scan
