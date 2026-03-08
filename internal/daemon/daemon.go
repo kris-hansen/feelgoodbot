@@ -166,15 +166,55 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	defer d.removePidFile()
 
-	// Start API server in background
+	// Start API server in background with auto-restart
 	serverErrChan := make(chan error, 1)
-	go func() {
+	serverRestartChan := make(chan struct{}, 1)
+
+	startServer := func() {
 		d.logger.Printf("Starting API server on %s", d.socketPath)
 		if err := d.server.Start(); err != nil {
 			d.logger.Printf("API server error: %v", err)
 			serverErrChan <- err
 		}
+	}
+
+	go startServer()
+
+	// Server restart handler
+	go func() {
+		for {
+			select {
+			case <-d.stopChan:
+				return
+			case err := <-serverErrChan:
+				d.logger.Printf("API server failed: %v - attempting restart in 5s", err)
+				time.Sleep(5 * time.Second)
+
+				// Recreate server instance
+				home, _ := os.UserHomeDir()
+				configDir := filepath.Join(home, ".config", "feelgoodbot")
+				d.socketPath = filepath.Join(configDir, "daemon.sock")
+				d.server = server.New(&server.Config{
+					SocketPath: d.socketPath,
+					Gate:       d.gate,
+					Log:        d.secureLog,
+				})
+
+				// Clean up old socket
+				_ = os.Remove(d.socketPath)
+
+				// Restart
+				d.logger.Println("Restarting API server...")
+				go startServer()
+
+				select {
+				case serverRestartChan <- struct{}{}:
+				default:
+				}
+			}
+		}
 	}()
+
 	defer func() {
 		d.logger.Println("Stopping API server")
 		_ = d.server.Stop()
@@ -199,9 +239,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 		select {
 		case <-ticker.C:
 			d.runScan()
-		case err := <-serverErrChan:
-			d.logger.Printf("API server failed: %v", err)
-			return fmt.Errorf("API server failed: %w", err)
+		case <-serverRestartChan:
+			d.logger.Println("API server restarted successfully")
 		case <-sigChan:
 			d.logger.Println("Received shutdown signal")
 			return nil
