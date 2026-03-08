@@ -110,7 +110,7 @@ func TestFormatTimestamp(t *testing.T) {
 	}{
 		{
 			input:    "2026-02-26T10:30:00-07:00",
-			expected: "10:30:00",
+			expected: "2026-02-26 10:30:00",
 		},
 		{
 			input:    "invalid",

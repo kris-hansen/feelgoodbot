@@ -142,7 +142,7 @@ func (c *Console) clearScreen() {
 	fmt.Println("\033[1m\033[36m╚══════════════════════════════════════════════════╝\033[0m")
 	fmt.Println()
 	fmt.Printf("\033[90mListening for alerts... (Ctrl+C to exit)\033[0m\n")
-	fmt.Printf("\033[90mCleared: %s\033[0m\n", time.Now().Format("15:04:05"))
+	fmt.Printf("\033[90mCleared: %s\033[0m\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Println()
 }
 
@@ -451,7 +451,7 @@ func formatTimestamp(iso string) string {
 	if err != nil {
 		return iso
 	}
-	return t.Format("15:04:05")
+	return t.Format("2006-01-02 15:04:05")
 }
 
 // parseItemList parses "3", "3,5,7", or "3-7" into a list of valid item numbers

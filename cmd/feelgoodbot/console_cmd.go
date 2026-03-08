@@ -44,7 +44,7 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	defer c.Stop()
 
 	fmt.Printf("\033[90mListening for alerts... (Ctrl+C to exit)\033[0m\n")
-	fmt.Printf("\033[90mLast check: %s\033[0m\n", time.Now().Format("15:04:05"))
+	fmt.Printf("\033[90mLast check: %s\033[0m\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Println()
 
 	// Wait for interrupt
