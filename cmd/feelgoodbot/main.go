@@ -502,6 +502,56 @@ var daemonStopCmd = &cobra.Command{
 	},
 }
 
+var daemonRestartCmd = &cobra.Command{
+	Use:   "restart",
+	Short: "Restart the monitoring daemon",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Println("🔄 Restarting feelgoodbot daemon...")
+
+		uid := os.Getuid()
+		domain := fmt.Sprintf("gui/%d", uid)
+
+		// Stop first
+		_ = exec.Command("launchctl", "bootout", domain+"/com.feelgoodbot.daemon").Run()
+
+		// Clean up stale sockets
+		home, _ := os.UserHomeDir()
+		configDir := filepath.Join(home, ".config", "feelgoodbot")
+		_ = os.Remove(filepath.Join(configDir, "daemon.sock"))
+		_ = os.Remove(filepath.Join(configDir, "feelgoodbot.sock"))
+
+		// Brief pause
+		time.Sleep(500 * time.Millisecond)
+
+		// Start again
+		plistPath := daemon.LaunchdPlistPath()
+		if _, err := os.Stat(plistPath); os.IsNotExist(err) {
+			return fmt.Errorf("daemon not installed - run 'feelgoodbot daemon install' first")
+		}
+
+		err := exec.Command("launchctl", "bootstrap", domain, plistPath).Run()
+		if err != nil {
+			// Fall back to legacy load
+			err = exec.Command("launchctl", "load", plistPath).Run()
+			if err != nil {
+				return fmt.Errorf("failed to start daemon: %w", err)
+			}
+		}
+
+		// Wait for startup
+		time.Sleep(time.Second)
+
+		// Verify running
+		status := daemon.GetStatus("")
+		if !status.Running {
+			return fmt.Errorf("daemon failed to start - check logs with 'feelgoodbot daemon status'")
+		}
+
+		fmt.Println("✅ Daemon restarted (PID:", status.PID, ")")
+		return nil
+	},
+}
+
 var daemonRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run daemon in foreground (used by launchd)",
@@ -634,6 +684,7 @@ func init() {
 	daemonCmd.AddCommand(daemonUninstallCmd)
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
+	daemonCmd.AddCommand(daemonRestartCmd)
 	daemonCmd.AddCommand(daemonRunCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)
 }
