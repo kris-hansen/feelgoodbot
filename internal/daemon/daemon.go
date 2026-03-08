@@ -169,7 +169,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Start API server in background with auto-restart
 	serverErrChan := make(chan error, 1)
 	serverRestartChan := make(chan struct{}, 1)
-	
+
 	startServer := func() {
 		d.logger.Printf("Starting API server on %s", d.socketPath)
 		if err := d.server.Start(); err != nil {
@@ -177,9 +177,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 			serverErrChan <- err
 		}
 	}
-	
+
 	go startServer()
-	
+
 	// Server restart handler
 	go func() {
 		for {
@@ -189,7 +189,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			case err := <-serverErrChan:
 				d.logger.Printf("API server failed: %v - attempting restart in 5s", err)
 				time.Sleep(5 * time.Second)
-				
+
 				// Recreate server instance
 				home, _ := os.UserHomeDir()
 				configDir := filepath.Join(home, ".config", "feelgoodbot")
@@ -199,14 +199,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 					Gate:       d.gate,
 					Log:        d.secureLog,
 				})
-				
+
 				// Clean up old socket
 				_ = os.Remove(d.socketPath)
-				
+
 				// Restart
 				d.logger.Println("Restarting API server...")
 				go startServer()
-				
+
 				select {
 				case serverRestartChan <- struct{}{}:
 				default:
@@ -214,7 +214,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 		}
 	}()
-	
+
 	defer func() {
 		d.logger.Println("Stopping API server")
 		_ = d.server.Stop()
