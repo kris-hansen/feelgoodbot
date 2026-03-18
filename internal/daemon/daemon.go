@@ -291,22 +291,47 @@ func (d *Daemon) runScan() {
 
 	if len(changes) == 0 {
 		d.logger.Println("No changes detected")
+		// Prune stale alerted state when no changes remain
+		if alertedState, err := scanner.LoadAlertedState(); err == nil {
+			alertedState.PruneStale(changes)
+			_ = alertedState.Save()
+		}
 		return
 	}
 
-	// Log and alert on changes
-	critical := scanner.FilterBySeverity(changes, scanner.SeverityCritical)
-	warnings := scanner.FilterBySeverity(changes, scanner.SeverityWarning)
+	// Load alerted state to filter out already-alerted changes
+	alertedState, err := scanner.LoadAlertedState()
+	if err != nil {
+		d.logger.Printf("Warning: failed to load alerted state: %v", err)
+		alertedState = &scanner.AlertedState{AlertedChanges: make(map[string]string)}
+	}
 
-	d.logger.Printf("Detected %d changes (%d critical, %d warnings)",
-		len(changes), len(critical), len(warnings)-len(critical))
+	// Filter to only NEW changes (not previously alerted)
+	newChanges := alertedState.FilterNewChanges(changes)
 
-	// Save diff for forensics
+	// Log all changes detected, but note how many are new
+	d.logger.Printf("Detected %d total changes, %d new (not previously alerted)",
+		len(changes), len(newChanges))
+
+	// Save diff for forensics (all changes, not just new)
 	if err := d.store.SaveDiff(changes); err != nil {
 		d.logger.Printf("Warning: failed to save diff: %v", err)
 	}
 
-	// Send alerts
+	// Only alert on NEW changes
+	if len(newChanges) == 0 {
+		d.logger.Println("All changes were previously alerted - no new alerts")
+		return
+	}
+
+	// Log and alert on new changes only
+	critical := scanner.FilterBySeverity(newChanges, scanner.SeverityCritical)
+	warnings := scanner.FilterBySeverity(newChanges, scanner.SeverityWarning)
+
+	d.logger.Printf("Alerting on %d new changes (%d critical, %d warnings)",
+		len(newChanges), len(critical), len(warnings)-len(critical))
+
+	// Send alerts for new changes only
 	if len(critical) > 0 || len(warnings) > 0 {
 		hostname := alerts.GetHostname()
 
@@ -328,7 +353,7 @@ func (d *Daemon) runScan() {
 			Timestamp: time.Now(),
 			Severity:  scanner.SeverityCritical,
 			Message:   message,
-			Changes:   changes,
+			Changes:   newChanges, // Only include new changes in alert
 			Hostname:  hostname,
 		}
 
@@ -340,6 +365,11 @@ func (d *Daemon) runScan() {
 			d.logger.Printf("Error sending alert: %v", err)
 		} else {
 			d.logger.Println("Alert sent successfully")
+			// Mark these changes as alerted so we don't re-alert
+			alertedState.MarkAlerted(newChanges)
+			if err := alertedState.Save(); err != nil {
+				d.logger.Printf("Warning: failed to save alerted state: %v", err)
+			}
 		}
 
 		// Log to secure audit trail
