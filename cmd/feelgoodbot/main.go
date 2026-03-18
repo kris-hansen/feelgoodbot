@@ -68,6 +68,104 @@ func init() {
 	rootCmd.AddCommand(indicatorsCmd)
 	rootCmd.AddCommand(totpCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(ackCmd)
+}
+
+// ack command - acknowledge current changes without permanent ignore
+var ackCmd = &cobra.Command{
+	Use:   "ack",
+	Short: "Acknowledge current changes (stops re-alerting until new changes)",
+	Long: `Acknowledge all current detected changes without permanently ignoring them.
+
+This is useful when you've reviewed changes and want to stop receiving alerts
+for them, but don't want to permanently ignore those paths. If any acknowledged
+file changes AGAIN in the future, you'll be alerted.
+
+To permanently ignore specific paths, use the console ('feelgoodbot console') 
+and press 'i' on individual items.
+
+Examples:
+  feelgoodbot ack           # Acknowledge all current changes
+  feelgoodbot ack --clear   # Clear acknowledgment state (re-alert on all)`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		clearFlag, _ := cmd.Flags().GetBool("clear")
+
+		if clearFlag {
+			// Clear all acknowledged state
+			state, err := scanner.LoadAlertedState()
+			if err != nil {
+				return fmt.Errorf("failed to load alerted state: %w", err)
+			}
+			state.ClearAll()
+			if err := state.Save(); err != nil {
+				return fmt.Errorf("failed to save state: %w", err)
+			}
+			fmt.Println("✅ Cleared all acknowledgments. Next scan will alert on all detected changes.")
+			return nil
+		}
+
+		// Load baseline
+		store, err := snapshot.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to access snapshot store: %w", err)
+		}
+
+		if !store.HasBaseline() {
+			fmt.Println("❌ No baseline found. Run 'feelgoodbot init' first.")
+			return nil
+		}
+
+		baseline, err := store.LoadBaseline()
+		if err != nil {
+			return fmt.Errorf("failed to load baseline: %w", err)
+		}
+
+		// Perform scan
+		s := scanner.New()
+		result := s.Scan()
+
+		// Compare with baseline
+		changes := scanner.Compare(baseline.Files, result.Files)
+
+		// Filter out permanently ignored paths
+		ignored, err := scanner.LoadIgnoreList()
+		if err == nil && len(ignored) > 0 {
+			changes = scanner.FilterIgnored(changes, ignored)
+		}
+
+		if len(changes) == 0 {
+			fmt.Println("ℹ️  No changes to acknowledge.")
+			return nil
+		}
+
+		// Load and update alerted state
+		state, err := scanner.LoadAlertedState()
+		if err != nil {
+			return fmt.Errorf("failed to load alerted state: %w", err)
+		}
+
+		state.AcknowledgeAll(changes)
+		if err := state.Save(); err != nil {
+			return fmt.Errorf("failed to save state: %w", err)
+		}
+
+		fmt.Printf("✅ Acknowledged %d changes. You won't be re-alerted until they change again.\n", len(changes))
+		fmt.Println()
+		fmt.Println("Acknowledged paths:")
+		for i, c := range changes {
+			if i >= 10 {
+				fmt.Printf("   ... and %d more\n", len(changes)-10)
+				break
+			}
+			fmt.Printf("   • %s (%s)\n", c.Path, c.Type)
+		}
+
+		return nil
+	},
+}
+
+func init() {
+	ackCmd.Flags().Bool("clear", false, "Clear all acknowledgments")
 }
 
 // version command - show version info

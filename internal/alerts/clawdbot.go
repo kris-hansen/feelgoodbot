@@ -409,12 +409,23 @@ func writeAlertScript(detailsPath string) string {
 	}
 
 	scriptPath := filepath.Join(scriptsDir, "show_alert.sh")
+	// Use a heredoc-style AppleScript that opens Terminal properly
+	// The key is using 'do script' with a full path and proper escaping
 	script := fmt.Sprintf(`#!/bin/bash
-osascript -e 'tell application "Terminal"
+# Open Terminal and show alert details
+# Using osascript with proper Terminal handling
+
+/usr/bin/osascript <<'APPLESCRIPT'
+tell application "Terminal"
     activate
-    do script "clear && cat \"%s\" && echo \"\" && echo \"Press Enter to close...\" && read && exit"
-end tell'
-`, detailsPath)
+    if (count of windows) = 0 then
+        do script "clear && cat '%s' && echo '' && echo 'Run: feelgoodbot console  (for interactive mode)' && echo 'Press Enter to close...' && read && exit"
+    else
+        do script "clear && cat '%s' && echo '' && echo 'Run: feelgoodbot console  (for interactive mode)' && echo 'Press Enter to close...' && read && exit" in front window
+    end if
+end tell
+APPLESCRIPT
+`, detailsPath, detailsPath)
 
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		return ""
