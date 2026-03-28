@@ -14,14 +14,15 @@ The reality: determined attackers might get in. The question is how fast you det
 ## Features
 
 1. **File Integrity Monitoring** — Detect tampering of critical system files
-2. **TOTP Step-Up Authentication** — Require OTP codes for sensitive AI agent actions
-3. **Gate Engine** — Request/approve/deny lifecycle for sensitive actions with token management
-4. **Secure Logging** — Tamper-evident HMAC-signed logs with hash chain verification
-5. **Socket API** — Unix socket server for daemon communication (programmatic access)
-6. **Lockdown Mode** — Emergency lockdown that blocks all gated actions
-7. **Markdown Scanner** — Detect prompt injection attacks in markdown files
-8. **Skill Scanner** — Supply chain attack detection for AI agent skills
-9. **AI-Powered Review** — LLM-assisted deep analysis of suspicious skills
+2. **Egress Monitoring** — Baseline and alert on anomalous network connections
+3. **TOTP Step-Up Authentication** — Require OTP codes for sensitive AI agent actions
+4. **Gate Engine** — Request/approve/deny lifecycle for sensitive actions with token management
+5. **Secure Logging** — Tamper-evident HMAC-signed logs with hash chain verification
+6. **Socket API** — Unix socket server for daemon communication (programmatic access)
+7. **Lockdown Mode** — Emergency lockdown that blocks all gated actions
+8. **Markdown Scanner** — Detect prompt injection attacks in markdown files
+9. **Skill Scanner** — Supply chain attack detection for AI agent skills
+10. **AI-Powered Review** — LLM-assisted deep analysis of suspicious skills
 
 ## How It Works
 
@@ -186,6 +187,101 @@ indicators:
 | `severity` | string | `critical`, `warning`, or `info` |
 | `recursive` | bool | If true, scan subdirectories. If false, only top-level. |
 | `category` | string | Category for grouping (e.g., `ai_agents`, `custom`) |
+
+## Egress Monitoring 🌐
+
+Monitor outbound network connections to detect backdoors, RATs, and data exfiltration. Same concept as file integrity monitoring — baseline what's "normal," then alert on deviations.
+
+### Threat Model
+
+| Threat | Behavior | Detected? |
+|--------|----------|-----------|
+| RAT/Backdoor | Persistent connection or periodic beacon | ✅ Yes |
+| C2 Communication | Regular check-ins to command server | ✅ Yes |
+| Crypto miner | Persistent pool connection | ✅ Yes |
+| Stalkerware | Periodic data upload | ✅ Yes |
+| Supply chain implant | Beacon to attacker infrastructure | ✅ Yes |
+| Quick burst stealer | Grab & exfil in seconds | ❌ May miss |
+
+### Quick Start
+
+```bash
+# Start learning mode (run for a day or so to build baseline)
+feelgoodbot egress init
+
+# Check what's being learned
+feelgoodbot egress status
+
+# Stop learning, switch to monitoring mode
+feelgoodbot egress stop
+
+# The daemon now alerts on anomalies
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `egress init` | Start learning mode, baseline current connections |
+| `egress stop` | Save baseline, switch to monitoring mode |
+| `egress status` | Show monitoring state and baseline stats |
+| `egress snapshot` | One-shot dump of current ESTABLISHED connections |
+| `egress diff` | Compare current connections vs baseline |
+| `egress baseline` | Display full baseline contents |
+| `egress ignore <process>` | Add process to ignore list (e.g., `curl`) |
+
+### How It Works
+
+1. **Learning mode** — Daemon captures connections every 60s, merges into baseline
+2. **Monitoring mode** — Daemon compares current connections to baseline, alerts on:
+   - **new_process** (CRITICAL) — A process that's never made network connections before
+   - **new_destination** (WARNING) — Known process connecting to a new host:port
+3. **Alerts** — Uses existing alert system (Clawdbot webhook, Slack, local notification)
+
+### Configuration
+
+```yaml
+# ~/.config/feelgoodbot/config.yaml
+egress:
+  enabled: true           # Enable egress monitoring
+  interval: 60s           # How often to sample connections
+  learning: false         # true during learning mode
+  alerts:
+    new_process: true     # Alert on never-seen processes
+    new_destination: true # Alert on new destinations for known processes
+```
+
+### Baseline Format
+
+```json
+{
+  "processes": {
+    "node": {
+      "destinations": ["api.openai.com:443", "registry.npmjs.org:443"],
+      "first_seen": "2026-03-28T10:00:00Z",
+      "last_seen": "2026-03-28T16:00:00Z"
+    },
+    "curl": {
+      "destinations": ["*"],
+      "first_seen": "2026-03-28T10:00:00Z"
+    }
+  },
+  "ignored": ["curl", "wget"]
+}
+```
+
+**Wildcards:**
+- `*` as destination — process can connect anywhere (useful for `curl`, `wget`)
+- `host:*` — process can connect to any port on that host
+- `*:443` — process can connect to port 443 on any host
+
+### Best Practices
+
+1. **Learn for at least 24 hours** — Capture your normal daily patterns
+2. **Include weekday and weekend** — Usage patterns differ
+3. **Ignore noisy processes** — `curl`, `wget`, browsers if they connect everywhere
+4. **Review baseline** — Use `egress baseline` to sanity-check what was learned
+5. **Check diff first** — Run `egress diff` before enabling monitoring to see what would alert
 
 ## TOTP Step-Up Authentication 🔐
 
