@@ -37,9 +37,9 @@ type Baseline struct {
 
 // Anomaly represents a deviation from the baseline
 type Anomaly struct {
-	Type        string `json:"type"`        // "new_process" or "new_destination"
-	Process     string `json:"process"`
-	Destination string `json:"destination"`
+	Type        string    `json:"type"` // "new_process" or "new_destination"
+	Process     string    `json:"process"`
+	Destination string    `json:"destination"`
 	Timestamp   time.Time `json:"timestamp"`
 }
 
@@ -176,7 +176,7 @@ func parseLsof(output string) []Connection {
 
 		processName := fields[0]
 		pid := 0
-		fmt.Sscanf(fields[1], "%d", &pid)
+		_, _ = fmt.Sscanf(fields[1], "%d", &pid)
 
 		// The name field contains something like "host:port->remote:port"
 		nameField := fields[len(fields)-2] // Second to last field usually has the connection info

@@ -95,7 +95,7 @@ func TestMatchesDestination(t *testing.T) {
 		Destinations: map[string]bool{
 			"api.openai.com:443": true,
 			"localhost:*":        true,
-			"10.0.0.1:*":        true,
+			"10.0.0.1:*":         true,
 		},
 	}
 
@@ -105,11 +105,11 @@ func TestMatchesDestination(t *testing.T) {
 	}{
 		{"api.openai.com:443", true},
 		{"api.openai.com:80", false},
-		{"127.0.0.1:5432", true},   // matches localhost:*
-		{"127.0.0.1:3000", true},   // matches localhost:*
-		{"10.0.0.1:443", true},     // matches 10.0.0.1:*
-		{"10.0.0.1:8080", true},    // matches 10.0.0.1:*
-		{"10.0.0.2:443", false},    // different host
+		{"127.0.0.1:5432", true}, // matches localhost:*
+		{"127.0.0.1:3000", true}, // matches localhost:*
+		{"10.0.0.1:443", true},   // matches 10.0.0.1:*
+		{"10.0.0.1:8080", true},  // matches 10.0.0.1:*
+		{"10.0.0.2:443", false},  // different host
 		{"evil.com:443", false},
 	}
 
