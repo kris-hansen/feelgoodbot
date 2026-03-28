@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kris-hansen/feelgoodbot/internal/alerts"
+	"github.com/kris-hansen/feelgoodbot/internal/egress"
 	"github.com/kris-hansen/feelgoodbot/internal/gate"
 	"github.com/kris-hansen/feelgoodbot/internal/logging"
 	"github.com/kris-hansen/feelgoodbot/internal/scanner"
@@ -24,10 +25,13 @@ import (
 
 // Config holds daemon configuration
 type Config struct {
-	ScanInterval time.Duration
-	AlertConfig  alerts.Config
-	LogFile      string
-	PidFile      string
+	ScanInterval    time.Duration
+	AlertConfig     alerts.Config
+	LogFile         string
+	PidFile         string
+	EgressInterval  time.Duration
+	EgressAlertNew  bool // alert on new_process
+	EgressAlertDest bool // alert on new_destination
 }
 
 // DefaultConfig returns sensible defaults
@@ -231,14 +235,27 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Initial scan
 	d.runScan()
 
+	// Initial egress scan
+	d.runEgressScan()
+
 	// Main loop
 	ticker := time.NewTicker(d.config.ScanInterval)
 	defer ticker.Stop()
+
+	// Egress scan ticker (separate interval)
+	egressInterval := d.config.EgressInterval
+	if egressInterval == 0 {
+		egressInterval = 60 * time.Second
+	}
+	egressTicker := time.NewTicker(egressInterval)
+	defer egressTicker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
 			d.runScan()
+		case <-egressTicker.C:
+			d.runEgressScan()
 		case <-serverRestartChan:
 			d.logger.Println("API server restarted successfully")
 		case <-sigChan:
@@ -389,6 +406,150 @@ func (d *Daemon) runScan() {
 			// Future: configurable response actions (disconnect network, shutdown)
 		}
 	}
+}
+
+// runEgressScan performs a single egress scan cycle
+func (d *Daemon) runEgressScan() {
+	// Load egress status to check if enabled/learning
+	status, err := egress.LoadStatus()
+	if err != nil {
+		// No egress status file means egress isn't set up — skip silently
+		return
+	}
+
+	if !status.Learning && !status.Enabled {
+		return
+	}
+
+	conns, err := egress.CaptureConnections()
+	if err != nil {
+		d.logger.Printf("Egress scan error: %v", err)
+		return
+	}
+
+	// Update scan stats
+	status.LastScan = time.Now()
+	status.TotalScans++
+
+	if status.Learning {
+		// Learning mode: merge connections into baseline
+		baseline, err := egress.LoadBaseline()
+		if err != nil {
+			d.logger.Printf("Egress: failed to load baseline: %v", err)
+			return
+		}
+
+		before := len(baseline.Processes)
+		egress.MergeIntoBaseline(baseline, conns)
+		after := len(baseline.Processes)
+
+		if err := egress.SaveBaseline(baseline); err != nil {
+			d.logger.Printf("Egress: failed to save baseline: %v", err)
+		}
+
+		if after > before {
+			d.logger.Printf("Egress learning: %d new process(es), %d total", after-before, after)
+		}
+
+		_ = egress.SaveStatus(status)
+		return
+	}
+
+	// Monitoring mode: compare and alert
+	baseline, err := egress.LoadBaseline()
+	if err != nil {
+		d.logger.Printf("Egress: failed to load baseline: %v", err)
+		return
+	}
+
+	anomalies := egress.CompareToBaseline(baseline, conns)
+	_ = egress.SaveStatus(status)
+
+	if len(anomalies) == 0 {
+		return
+	}
+
+	// Filter anomalies by configured alert types
+	var filtered []egress.Anomaly
+	for _, a := range anomalies {
+		switch a.Type {
+		case "new_process":
+			if d.config.EgressAlertNew {
+				filtered = append(filtered, a)
+			}
+		case "new_destination":
+			if d.config.EgressAlertDest {
+				filtered = append(filtered, a)
+			}
+		}
+	}
+
+	if len(filtered) == 0 {
+		return
+	}
+
+	d.logger.Printf("Egress: %d anomalies detected", len(filtered))
+
+	// Build alert message
+	var message string
+	newProcs := 0
+	newDests := 0
+	for _, a := range filtered {
+		if a.Type == "new_process" {
+			newProcs++
+		} else {
+			newDests++
+		}
+	}
+
+	if newProcs > 0 {
+		message = fmt.Sprintf("🚨 EGRESS: %d unknown process(es) making network connections!", newProcs)
+	} else {
+		message = fmt.Sprintf("⚠️ EGRESS: %d new destination(s) detected", newDests)
+	}
+
+	for i, a := range filtered {
+		if i >= 5 {
+			message += fmt.Sprintf("\n... and %d more", len(filtered)-5)
+			break
+		}
+		switch a.Type {
+		case "new_process":
+			message += fmt.Sprintf("\n• NEW PROCESS: %s → %s", a.Process, a.Destination)
+		case "new_destination":
+			message += fmt.Sprintf("\n• NEW DEST: %s → %s", a.Process, a.Destination)
+		}
+	}
+
+	severity := scanner.SeverityWarning
+	if newProcs > 0 {
+		severity = scanner.SeverityCritical
+	}
+
+	hostname := alerts.GetHostname()
+	alert := alerts.Alert{
+		Timestamp: time.Now(),
+		Severity:  severity,
+		Message:   message,
+		Hostname:  hostname,
+	}
+
+	if err := d.alerter.Send(alert); err != nil {
+		d.logger.Printf("Egress: failed to send alert: %v", err)
+	} else {
+		d.logger.Println("Egress alert sent")
+	}
+
+	// Log to secure audit trail
+	sevStr := "warning"
+	if newProcs > 0 {
+		sevStr = "critical"
+	}
+	_ = d.secureLog.LogIntegrity("egress_anomaly", sevStr, "daemon", map[string]string{
+		"anomalies":        fmt.Sprintf("%d", len(filtered)),
+		"new_processes":    fmt.Sprintf("%d", newProcs),
+		"new_destinations": fmt.Sprintf("%d", newDests),
+	})
 }
 
 // writePidFile writes the daemon PID to a file

@@ -17,6 +17,21 @@ type Config struct {
 	ScanInterval time.Duration   `mapstructure:"scan_interval"`
 	Alerts       AlertConfig     `mapstructure:"alerts"`
 	Response     ResponseConfig  `mapstructure:"response"`
+	Egress       EgressConfig    `mapstructure:"egress"`
+}
+
+// EgressConfig configures network egress monitoring
+type EgressConfig struct {
+	Enabled  bool          `mapstructure:"enabled"`
+	Interval time.Duration `mapstructure:"interval"`
+	Learning bool          `mapstructure:"learning"`
+	Alerts   EgressAlerts  `mapstructure:"alerts"`
+}
+
+// EgressAlerts configures which egress anomalies generate alerts
+type EgressAlerts struct {
+	NewProcess     bool `mapstructure:"new_process"`
+	NewDestination bool `mapstructure:"new_destination"`
 }
 
 // IndicatorConfig configures what to monitor
@@ -85,6 +100,15 @@ func DefaultConfig() *Config {
 			OnCritical: []string{"alert"},
 			OnWarning:  []string{"alert"},
 			OnInfo:     []string{"log"},
+		},
+		Egress: EgressConfig{
+			Enabled:  false,
+			Interval: 60 * time.Second,
+			Learning: false,
+			Alerts: EgressAlerts{
+				NewProcess:     true,
+				NewDestination: true,
+			},
 		},
 	}
 }

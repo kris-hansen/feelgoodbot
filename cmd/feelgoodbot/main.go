@@ -69,6 +69,7 @@ func init() {
 	rootCmd.AddCommand(totpCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(ackCmd)
+	rootCmd.AddCommand(egressCmd)
 }
 
 // ack command - acknowledge current changes without permanent ignore
@@ -698,6 +699,11 @@ var daemonRunCmd = &cobra.Command{
 		if daemonClawdbot != "" {
 			cfg.AlertConfig.ClawdbotURL = daemonClawdbot
 		}
+
+		// Map egress config
+		cfg.EgressInterval = fileCfg.Egress.Interval
+		cfg.EgressAlertNew = fileCfg.Egress.Alerts.NewProcess
+		cfg.EgressAlertDest = fileCfg.Egress.Alerts.NewDestination
 
 		// Create and run daemon
 		d, err := daemon.New(cfg)
