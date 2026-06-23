@@ -896,3 +896,7 @@ MIT — Use it, fork it, improve it.
 ---
 
 **feelgoodbot.com** — Sleep better knowing you'll know.
+
+## Download History
+
+[![Download History](https://skill-history.com/chart/kris-hansen/feelgoodbot.svg)](https://skill-history.com/kris-hansen/feelgoodbot)
