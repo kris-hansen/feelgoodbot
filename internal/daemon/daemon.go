@@ -32,6 +32,7 @@ type Config struct {
 	EgressInterval  time.Duration
 	EgressAlertNew  bool // alert on new_process
 	EgressAlertDest bool // alert on new_destination
+	Retention       snapshot.RetentionPolicy
 }
 
 // DefaultConfig returns sensible defaults
@@ -44,6 +45,7 @@ func DefaultConfig() Config {
 		AlertConfig: alerts.Config{
 			LocalNotify: true,
 		},
+		Retention: snapshot.DefaultRetentionPolicy(),
 	}
 }
 
@@ -228,6 +230,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	d.logger.Printf("Daemon started (scan interval: %s)", d.config.ScanInterval)
 
+	// Enforce snapshot retention on startup to recover from any backlog
+	d.pruneSnapshots()
+
 	// Set up signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -330,16 +335,18 @@ func (d *Daemon) runScan() {
 	d.logger.Printf("Detected %d total changes, %d new (not previously alerted)",
 		len(changes), len(newChanges))
 
-	// Save diff for forensics (all changes, not just new)
-	if err := d.store.SaveDiff(changes); err != nil {
-		d.logger.Printf("Warning: failed to save diff: %v", err)
-	}
-
-	// Only alert on NEW changes
+	// Only alert on NEW changes. Skip the diff too: re-saving an identical
+	// change set every scan fills the disk without adding forensic value.
 	if len(newChanges) == 0 {
 		d.logger.Println("All changes were previously alerted - no new alerts")
 		return
 	}
+
+	// Save diff for forensics (all changes, not just new)
+	if err := d.store.SaveDiff(changes); err != nil {
+		d.logger.Printf("Warning: failed to save diff: %v", err)
+	}
+	d.pruneSnapshots()
 
 	// Log and alert on new changes only
 	critical := scanner.FilterBySeverity(newChanges, scanner.SeverityCritical)
@@ -405,6 +412,26 @@ func (d *Daemon) runScan() {
 			d.logger.Println("CRITICAL changes detected - review immediately!")
 			// Future: configurable response actions (disconnect network, shutdown)
 		}
+	}
+}
+
+// pruneSnapshots enforces the snapshot retention policy and logs the outcome
+func (d *Daemon) pruneSnapshots() {
+	policy := d.config.Retention
+	if policy.MaxBytes == 0 && policy.MaxAge == 0 {
+		return
+	}
+
+	result, err := d.store.Prune(policy, false)
+	if err != nil {
+		d.logger.Printf("Warning: snapshot prune failed: %v", err)
+		return
+	}
+	if result.RemovedFiles > 0 {
+		d.logger.Printf("Pruned %d snapshot diff(s) (%s freed, %s in use)",
+			result.RemovedFiles,
+			snapshot.FormatSize(result.RemovedBytes),
+			snapshot.FormatSize(result.RemainingBytes))
 	}
 }
 
