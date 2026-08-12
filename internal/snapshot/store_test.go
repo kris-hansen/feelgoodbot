@@ -71,6 +71,36 @@ func TestStoreSaveAndLoadBaseline(t *testing.T) {
 	if len(loaded.Files) != len(files) {
 		t.Errorf("loaded Files count = %d, want %d", len(loaded.Files), len(files))
 	}
+
+	// A trusted baseline also resets the untrusted rolling checkpoint so the
+	// next daemon scan starts an incremental journal from this exact state.
+	lastScan, err := store.LoadLastScan()
+	if err != nil {
+		t.Fatalf("LoadLastScan() error = %v", err)
+	}
+	if len(lastScan.Files) != len(files) {
+		t.Errorf("last scan Files count = %d, want %d", len(lastScan.Files), len(files))
+	}
+}
+
+func TestStoreSaveAndLoadLastScan(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+	files := map[string]*scanner.FileInfo{
+		"/test/current": {Path: "/test/current", Hash: "current"},
+	}
+
+	snap, err := store.SaveLastScan(files)
+	if err != nil {
+		t.Fatalf("SaveLastScan() error = %v", err)
+	}
+	loaded, err := store.LoadLastScan()
+	if err != nil {
+		t.Fatalf("LoadLastScan() error = %v", err)
+	}
+	if loaded.ID != snap.ID || loaded.Files["/test/current"].Hash != "current" {
+		t.Errorf("last scan did not round-trip: %#v", loaded)
+	}
 }
 
 func TestStoreHasBaselineEmpty(t *testing.T) {
@@ -170,6 +200,248 @@ func TestStoreSaveDiffEmpty(t *testing.T) {
 	entries, _ := os.ReadDir(tmpDir)
 	if len(entries) != 0 {
 		t.Error("SaveDiff() with empty changes should not create file")
+	}
+}
+
+func TestStoreSaveDiffUsesUniqueNames(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+	changes := []scanner.Change{{Path: "/test/file", Type: "modified"}}
+
+	if err := store.SaveDiff(changes); err != nil {
+		t.Fatalf("first SaveDiff() error = %v", err)
+	}
+	if err := store.SaveDiff(changes); err != nil {
+		t.Fatalf("second SaveDiff() error = %v", err)
+	}
+
+	_, count, err := store.DiskUsage()
+	if err != nil {
+		t.Fatalf("DiskUsage() error = %v", err)
+	}
+	if count != 2 {
+		t.Errorf("diff count = %d, want 2", count)
+	}
+}
+
+// writeDiff creates a fake diff file with the given size and mod time
+func writeDiff(t *testing.T, dir, name string, size int, modTime time.Time) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, make([]byte, size), 0600); err != nil {
+		t.Fatalf("failed to write diff: %v", err)
+	}
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatalf("failed to set mod time: %v", err)
+	}
+}
+
+func TestParseSize(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    int64
+		wantErr bool
+	}{
+		{"", 0, false},
+		{"0", 0, false},
+		{"1024", 1024, false},
+		{"500KB", 500 * 1024, false},
+		{"500MB", 500 * 1024 * 1024, false},
+		{"1GB", 1 << 30, false},
+		{"1.5GB", 3 << 29, false},
+		{"2TB", 2 << 40, false},
+		{"1gb", 1 << 30, false},
+		{" 10 MB ", 10 << 20, false},
+		{"abc", 0, true},
+		{"-1GB", 0, true},
+	}
+
+	for _, tt := range tests {
+		got, err := ParseSize(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ParseSize(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if !tt.wantErr && got != tt.want {
+			t.Errorf("ParseSize(%q) = %d, want %d", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestPruneByAge(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+
+	now := time.Now()
+	writeDiff(t, tmpDir, "diff_old.json", 100, now.Add(-48*time.Hour))
+	writeDiff(t, tmpDir, "diff_new.json", 100, now.Add(-1*time.Hour))
+
+	result, err := store.Prune(RetentionPolicy{MaxAge: 24 * time.Hour}, false)
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+
+	if result.RemovedFiles != 1 {
+		t.Errorf("RemovedFiles = %d, want 1", result.RemovedFiles)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "diff_old.json")); !os.IsNotExist(err) {
+		t.Error("old diff should have been removed")
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "diff_new.json")); err != nil {
+		t.Error("recent diff should have been kept")
+	}
+}
+
+func TestPruneBySize(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+
+	now := time.Now()
+	writeDiff(t, tmpDir, "diff_a.json", 400, now.Add(-3*time.Hour))
+	writeDiff(t, tmpDir, "diff_b.json", 400, now.Add(-2*time.Hour))
+	writeDiff(t, tmpDir, "diff_c.json", 400, now.Add(-1*time.Hour))
+
+	// Cap at 1000 bytes: oldest diff must go
+	result, err := store.Prune(RetentionPolicy{MaxBytes: 1000}, false)
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+
+	if result.RemovedFiles != 1 {
+		t.Errorf("RemovedFiles = %d, want 1", result.RemovedFiles)
+	}
+	if result.RemainingBytes > 1000 {
+		t.Errorf("RemainingBytes = %d, want <= 1000", result.RemainingBytes)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "diff_a.json")); !os.IsNotExist(err) {
+		t.Error("oldest diff should have been removed first")
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "diff_c.json")); err != nil {
+		t.Error("newest diff should have been kept")
+	}
+}
+
+func TestPruneNeverRemovesBaseline(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+
+	files := map[string]*scanner.FileInfo{
+		"/test/file": {Path: "/test/file", Hash: "abc123"},
+	}
+	if _, err := store.SaveBaseline(files); err != nil {
+		t.Fatalf("SaveBaseline() error = %v", err)
+	}
+	writeDiff(t, tmpDir, "diff_x.json", 100, time.Now().Add(-time.Hour))
+
+	// Impossible cap: even removing every diff can't satisfy it
+	result, err := store.Prune(RetentionPolicy{MaxBytes: 1}, false)
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+
+	if !store.HasBaseline() {
+		t.Fatal("baseline must never be pruned")
+	}
+	if _, err := store.LoadLastScan(); err != nil {
+		t.Fatalf("last-scan checkpoint must never be pruned: %v", err)
+	}
+	if result.RemovedFiles != 1 {
+		t.Errorf("RemovedFiles = %d, want 1 (all diffs)", result.RemovedFiles)
+	}
+}
+
+func TestPruneDryRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+
+	writeDiff(t, tmpDir, "diff_old.json", 100, time.Now().Add(-48*time.Hour))
+
+	result, err := store.Prune(RetentionPolicy{MaxAge: 24 * time.Hour}, true)
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+
+	if result.RemovedFiles != 1 {
+		t.Errorf("dry run RemovedFiles = %d, want 1", result.RemovedFiles)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "diff_old.json")); err != nil {
+		t.Error("dry run must not delete files")
+	}
+}
+
+func TestPruneNoLimits(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+
+	writeDiff(t, tmpDir, "diff_old.json", 100, time.Now().Add(-1000*time.Hour))
+
+	result, err := store.Prune(RetentionPolicy{}, false)
+	if err != nil {
+		t.Fatalf("Prune() error = %v", err)
+	}
+	if result.RemovedFiles != 0 {
+		t.Errorf("zero policy should remove nothing, removed %d", result.RemovedFiles)
+	}
+}
+
+func TestDiskUsage(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+
+	writeDiff(t, tmpDir, "diff_a.json", 100, time.Now())
+	writeDiff(t, tmpDir, "diff_b.json", 200, time.Now())
+
+	usage, count, err := store.DiskUsage()
+	if err != nil {
+		t.Fatalf("DiskUsage() error = %v", err)
+	}
+	if usage != 300 {
+		t.Errorf("usage = %d, want 300", usage)
+	}
+	if count != 2 {
+		t.Errorf("diff count = %d, want 2", count)
+	}
+}
+
+func TestDiskUsageIncludesProtectedSnapshots(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+	if _, err := store.SaveBaseline(map[string]*scanner.FileInfo{
+		"/test/file": {Path: "/test/file", Hash: "abc"},
+	}); err != nil {
+		t.Fatalf("SaveBaseline() error = %v", err)
+	}
+	writeDiff(t, tmpDir, "diff_a.json", 100, time.Now())
+
+	baselineInfo, err := os.Stat(filepath.Join(tmpDir, "baseline.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastScanInfo, err := os.Stat(filepath.Join(tmpDir, "last_scan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	usage, count, err := store.DiskUsage()
+	if err != nil {
+		t.Fatalf("DiskUsage() error = %v", err)
+	}
+	want := baselineInfo.Size() + lastScanInfo.Size() + 100
+	if usage != want {
+		t.Errorf("usage = %d, want %d", usage, want)
+	}
+	if count != 1 {
+		t.Errorf("diff count = %d, want 1", count)
+	}
+}
+
+func TestDefaultRetentionPolicy(t *testing.T) {
+	policy := DefaultRetentionPolicy()
+	if policy.MaxBytes != 250<<20 {
+		t.Errorf("MaxBytes = %d, want %d", policy.MaxBytes, 250<<20)
+	}
+	if policy.MaxAge != 30*24*time.Hour {
+		t.Errorf("MaxAge = %s, want 30 days", policy.MaxAge)
 	}
 }
 

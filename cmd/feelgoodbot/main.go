@@ -62,6 +62,11 @@ func init() {
 	rootCmd.AddCommand(scanCmd)
 	rootCmd.AddCommand(snapshotCmd)
 	rootCmd.AddCommand(diffCmd)
+
+	snapshotPruneCmd.Flags().StringVar(&pruneMaxSize, "max-size", "", "Max total disk usage (e.g., 500MB, 1GB); overrides config")
+	snapshotPruneCmd.Flags().StringVar(&pruneMaxAge, "max-age", "", "Max diff age (e.g., 720h for 30 days); overrides config")
+	snapshotPruneCmd.Flags().BoolVar(&pruneDryRun, "dry-run", false, "Show what would be removed without deleting anything")
+	snapshotCmd.AddCommand(snapshotPruneCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(configCmd)
@@ -353,6 +358,89 @@ var snapshotCmd = &cobra.Command{
 
 		fmt.Println()
 		fmt.Printf("✅ Baseline updated (ID: %s)\n", snap.ID)
+		return nil
+	},
+}
+
+// snapshot prune command flags
+var (
+	pruneMaxSize string
+	pruneMaxAge  string
+	pruneDryRun  bool
+)
+
+// snapshot prune command - enforce retention on snapshot history
+var snapshotPruneCmd = &cobra.Command{
+	Use:   "prune",
+	Short: "Remove old snapshot diffs to reclaim disk space",
+	Long: `Remove historical diff snapshots according to the retention policy.
+
+Limits come from the config file (snapshots.max_disk_usage, snapshots.max_age)
+unless overridden with flags. The baseline and rolling checkpoint are never removed.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		store, err := snapshot.NewStore()
+		if err != nil {
+			return fmt.Errorf("failed to access snapshot store: %w", err)
+		}
+
+		// Start from config-file policy, then apply flag overrides
+		fileCfg, err := config.Load()
+		if err != nil {
+			fileCfg = config.DefaultConfig()
+		}
+
+		policy := snapshot.RetentionPolicy{MaxAge: fileCfg.Snapshots.MaxAge}
+		policy.MaxBytes, err = snapshot.ParseSize(fileCfg.Snapshots.MaxDiskUsage)
+		if err != nil {
+			return fmt.Errorf("invalid snapshots.max_disk_usage in config: %w", err)
+		}
+
+		if cmd.Flags().Changed("max-size") {
+			policy.MaxBytes, err = snapshot.ParseSize(pruneMaxSize)
+			if err != nil {
+				return fmt.Errorf("invalid --max-size: %w", err)
+			}
+		}
+		if cmd.Flags().Changed("max-age") {
+			policy.MaxAge, err = time.ParseDuration(pruneMaxAge)
+			if err != nil {
+				return fmt.Errorf("invalid --max-age: %w", err)
+			}
+		}
+
+		usage, diffCount, err := store.DiskUsage()
+		if err != nil {
+			return fmt.Errorf("failed to inspect snapshot store: %w", err)
+		}
+
+		fmt.Printf("📦 Snapshot store: %s across %d incremental diff(s) + baseline/checkpoint\n", snapshot.FormatSize(usage), diffCount)
+		if policy.MaxBytes > 0 {
+			fmt.Printf("   Max disk usage: %s\n", snapshot.FormatSize(policy.MaxBytes))
+		}
+		if policy.MaxAge > 0 {
+			fmt.Printf("   Max diff age:   %s\n", policy.MaxAge)
+		}
+		fmt.Println()
+
+		result, err := store.Prune(policy, pruneDryRun)
+		if err != nil {
+			return fmt.Errorf("prune failed: %w", err)
+		}
+
+		if result.RemovedFiles == 0 {
+			fmt.Println("✅ Nothing to prune - snapshot store is within limits")
+			return nil
+		}
+
+		if pruneDryRun {
+			fmt.Printf("🔍 Dry run: would remove %d diff(s), freeing %s\n",
+				result.RemovedFiles, snapshot.FormatSize(result.RemovedBytes))
+		} else {
+			fmt.Printf("✅ Removed %d diff(s), freed %s (%s now in use)\n",
+				result.RemovedFiles,
+				snapshot.FormatSize(result.RemovedBytes),
+				snapshot.FormatSize(result.RemainingBytes))
+		}
 		return nil
 	},
 }
@@ -705,6 +793,16 @@ var daemonRunCmd = &cobra.Command{
 		cfg.EgressAlertNew = fileCfg.Egress.Alerts.NewProcess
 		cfg.EgressAlertDest = fileCfg.Egress.Alerts.NewDestination
 
+		// Map snapshot retention config
+		maxBytes, err := snapshot.ParseSize(fileCfg.Snapshots.MaxDiskUsage)
+		if err != nil {
+			return fmt.Errorf("invalid snapshots.max_disk_usage: %w", err)
+		}
+		cfg.Retention = snapshot.RetentionPolicy{
+			MaxBytes: maxBytes,
+			MaxAge:   fileCfg.Snapshots.MaxAge,
+		}
+
 		// Create and run daemon
 		d, err := daemon.New(cfg)
 		if err != nil {
@@ -820,6 +918,14 @@ var statusCmd = &cobra.Command{
 			} else {
 				fmt.Printf("Baseline:    %s (created %s)\n", baseline.ID, baseline.CreatedAt.Format("2006-01-02 15:04"))
 				fmt.Printf("Files:       %d monitored\n", len(baseline.Files))
+				age := time.Since(baseline.CreatedAt).Round(time.Hour)
+				fmt.Printf("Baseline age: %s\n", age)
+				if age >= 30*24*time.Hour {
+					fmt.Println("⚠️  Review 'feelgoodbot diff'; run 'feelgoodbot snapshot' only after verifying current state is trusted.")
+				}
+			}
+			if usage, diffCount, err := store.DiskUsage(); err == nil {
+				fmt.Printf("Snapshots:   %s on disk (%d incremental diffs)\n", snapshot.FormatSize(usage), diffCount)
 			}
 		} else {
 			fmt.Println("Baseline:    not initialized (run 'feelgoodbot init')")

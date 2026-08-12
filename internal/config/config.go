@@ -18,6 +18,18 @@ type Config struct {
 	Alerts       AlertConfig     `mapstructure:"alerts"`
 	Response     ResponseConfig  `mapstructure:"response"`
 	Egress       EgressConfig    `mapstructure:"egress"`
+	Snapshots    SnapshotConfig  `mapstructure:"snapshots"`
+}
+
+// SnapshotConfig bounds disk usage of snapshot history.
+// Example in config.yaml:
+//
+//	snapshots:
+//	  max_disk_usage: 250MB # total size cap; "0" disables
+//	  max_age: 720h         # drop diffs older than this; 0 disables
+type SnapshotConfig struct {
+	MaxDiskUsage string        `mapstructure:"max_disk_usage"`
+	MaxAge       time.Duration `mapstructure:"max_age"`
 }
 
 // EgressConfig configures network egress monitoring
@@ -109,6 +121,10 @@ func DefaultConfig() *Config {
 				NewProcess:     true,
 				NewDestination: true,
 			},
+		},
+		Snapshots: SnapshotConfig{
+			MaxDiskUsage: "250MB",
+			MaxAge:       30 * 24 * time.Hour,
 		},
 	}
 }

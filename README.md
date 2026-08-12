@@ -146,7 +146,38 @@ response:
   
   on_info:
     - log
+
+# Snapshot history retention
+snapshots:
+  max_disk_usage: 250MB # total size cap for ~/.config/feelgoodbot/snapshots ("0" = no limit)
+  max_age: 720h         # drop diff snapshots older than this (0 = no limit)
 ```
+
+### Snapshot Retention
+
+The daemon keeps a trusted baseline for integrity alerts and a separate rolling
+last-scan checkpoint for the forensic journal. Each `diff_*.json` therefore
+contains only what changed since the preceding scan—not every historical change
+since the baseline. This keeps a stale baseline from hiding a new event in a
+repeated multi-megabyte report.
+
+Retention limits are enforced by default: **250 MB total** and **30 days of
+incremental history**. The daemon prunes on startup and after saving each diff,
+always removing the oldest diffs first. The trusted baseline and the rolling
+checkpoint are never removed. When the baseline is older than 30 days or a
+large portion of monitored files differs, `status` and the daemon log a review
+prompt; Feelgoodbot never silently accepts that changed state.
+
+You can also prune manually:
+
+```bash
+feelgoodbot snapshot prune --dry-run          # preview using configured limits
+feelgoodbot snapshot prune                    # enforce configured limits now
+feelgoodbot snapshot prune --max-size 500MB   # override size cap
+feelgoodbot snapshot prune --max-age 168h     # keep only the last 7 days
+```
+
+Current usage is shown in `feelgoodbot status`.
 
 ## Custom Indicators
 
@@ -675,6 +706,7 @@ Recommendations:
 | `feelgoodbot init` | Create initial baseline snapshot |
 | `feelgoodbot scan` | Run one-time integrity scan |
 | `feelgoodbot snapshot` | Update baseline snapshot |
+| `feelgoodbot snapshot prune` | Remove old snapshot diffs to reclaim disk space |
 | `feelgoodbot diff` | Show changes since last snapshot |
 | `feelgoodbot daemon start` | Start background monitoring |
 | `feelgoodbot daemon stop` | Stop daemon |
