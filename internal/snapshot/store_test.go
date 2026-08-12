@@ -71,6 +71,36 @@ func TestStoreSaveAndLoadBaseline(t *testing.T) {
 	if len(loaded.Files) != len(files) {
 		t.Errorf("loaded Files count = %d, want %d", len(loaded.Files), len(files))
 	}
+
+	// A trusted baseline also resets the untrusted rolling checkpoint so the
+	// next daemon scan starts an incremental journal from this exact state.
+	lastScan, err := store.LoadLastScan()
+	if err != nil {
+		t.Fatalf("LoadLastScan() error = %v", err)
+	}
+	if len(lastScan.Files) != len(files) {
+		t.Errorf("last scan Files count = %d, want %d", len(lastScan.Files), len(files))
+	}
+}
+
+func TestStoreSaveAndLoadLastScan(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+	files := map[string]*scanner.FileInfo{
+		"/test/current": {Path: "/test/current", Hash: "current"},
+	}
+
+	snap, err := store.SaveLastScan(files)
+	if err != nil {
+		t.Fatalf("SaveLastScan() error = %v", err)
+	}
+	loaded, err := store.LoadLastScan()
+	if err != nil {
+		t.Fatalf("LoadLastScan() error = %v", err)
+	}
+	if loaded.ID != snap.ID || loaded.Files["/test/current"].Hash != "current" {
+		t.Errorf("last scan did not round-trip: %#v", loaded)
+	}
 }
 
 func TestStoreHasBaselineEmpty(t *testing.T) {
@@ -170,6 +200,27 @@ func TestStoreSaveDiffEmpty(t *testing.T) {
 	entries, _ := os.ReadDir(tmpDir)
 	if len(entries) != 0 {
 		t.Error("SaveDiff() with empty changes should not create file")
+	}
+}
+
+func TestStoreSaveDiffUsesUniqueNames(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+	changes := []scanner.Change{{Path: "/test/file", Type: "modified"}}
+
+	if err := store.SaveDiff(changes); err != nil {
+		t.Fatalf("first SaveDiff() error = %v", err)
+	}
+	if err := store.SaveDiff(changes); err != nil {
+		t.Fatalf("second SaveDiff() error = %v", err)
+	}
+
+	_, count, err := store.DiskUsage()
+	if err != nil {
+		t.Fatalf("DiskUsage() error = %v", err)
+	}
+	if count != 2 {
+		t.Errorf("diff count = %d, want 2", count)
 	}
 }
 
@@ -291,6 +342,9 @@ func TestPruneNeverRemovesBaseline(t *testing.T) {
 	if !store.HasBaseline() {
 		t.Fatal("baseline must never be pruned")
 	}
+	if _, err := store.LoadLastScan(); err != nil {
+		t.Fatalf("last-scan checkpoint must never be pruned: %v", err)
+	}
 	if result.RemovedFiles != 1 {
 		t.Errorf("RemovedFiles = %d, want 1 (all diffs)", result.RemovedFiles)
 	}
@@ -346,6 +400,48 @@ func TestDiskUsage(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("diff count = %d, want 2", count)
+	}
+}
+
+func TestDiskUsageIncludesProtectedSnapshots(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := &Store{dir: tmpDir}
+	if _, err := store.SaveBaseline(map[string]*scanner.FileInfo{
+		"/test/file": {Path: "/test/file", Hash: "abc"},
+	}); err != nil {
+		t.Fatalf("SaveBaseline() error = %v", err)
+	}
+	writeDiff(t, tmpDir, "diff_a.json", 100, time.Now())
+
+	baselineInfo, err := os.Stat(filepath.Join(tmpDir, "baseline.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastScanInfo, err := os.Stat(filepath.Join(tmpDir, "last_scan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	usage, count, err := store.DiskUsage()
+	if err != nil {
+		t.Fatalf("DiskUsage() error = %v", err)
+	}
+	want := baselineInfo.Size() + lastScanInfo.Size() + 100
+	if usage != want {
+		t.Errorf("usage = %d, want %d", usage, want)
+	}
+	if count != 1 {
+		t.Errorf("diff count = %d, want 1", count)
+	}
+}
+
+func TestDefaultRetentionPolicy(t *testing.T) {
+	policy := DefaultRetentionPolicy()
+	if policy.MaxBytes != 250<<20 {
+		t.Errorf("MaxBytes = %d, want %d", policy.MaxBytes, 250<<20)
+	}
+	if policy.MaxAge != 30*24*time.Hour {
+		t.Errorf("MaxAge = %s, want 30 days", policy.MaxAge)
 	}
 }
 

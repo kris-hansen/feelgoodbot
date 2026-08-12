@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -51,16 +52,17 @@ func DefaultConfig() Config {
 
 // Daemon runs continuous file integrity monitoring
 type Daemon struct {
-	config     Config
-	store      *snapshot.Store
-	scanner    *scanner.Scanner
-	alerter    *alerts.Alerter
-	logger     *log.Logger
-	stopChan   chan struct{}
-	server     *server.Server
-	gate       *gate.Engine
-	secureLog  *logging.SecureLog
-	socketPath string
+	config               Config
+	store                *snapshot.Store
+	scanner              *scanner.Scanner
+	alerter              *alerts.Alerter
+	logger               *log.Logger
+	stopChan             chan struct{}
+	server               *server.Server
+	gate                 *gate.Engine
+	secureLog            *logging.SecureLog
+	socketPath           string
+	baselineHealthWarned bool
 }
 
 // New creates a new daemon instance
@@ -296,8 +298,28 @@ func (d *Daemon) runScan() {
 	result := d.scanner.Scan()
 	d.logger.Printf("Scanned %d files in %s", result.FilesScanned, result.EndTime.Sub(result.StartTime).Round(time.Millisecond))
 
+	// The last scan is a rolling checkpoint for the forensic journal. Do not
+	// fall back to baseline when it is missing: upgrades must not turn months of
+	// known drift into another huge snapshot. The baseline remains the anchor
+	// used for integrity alerts below.
+	lastScan, err := d.store.LoadLastScan()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			d.logger.Println("Initializing incremental snapshot checkpoint; existing baseline drift will not be re-journaled")
+		} else {
+			d.logger.Printf("Warning: invalid last-scan checkpoint; resetting it after this scan: %v", err)
+		}
+		lastScan = nil
+	}
+	defer func() {
+		if _, err := d.store.SaveLastScan(result.Files); err != nil {
+			d.logger.Printf("Warning: failed to save last-scan checkpoint: %v", err)
+		}
+	}()
+
 	// Compare with baseline
 	changes := scanner.Compare(baseline.Files, result.Files)
+	incrementalChanges := changesSinceLastScan(lastScan, result.Files)
 
 	// Filter out ignored paths
 	ignored, err := scanner.LoadIgnoreList()
@@ -306,10 +328,13 @@ func (d *Daemon) runScan() {
 	} else if len(ignored) > 0 {
 		beforeCount := len(changes)
 		changes = scanner.FilterIgnored(changes, ignored)
+		incrementalChanges = scanner.FilterIgnored(incrementalChanges, ignored)
 		if beforeCount != len(changes) {
 			d.logger.Printf("Filtered %d ignored path(s)", beforeCount-len(changes))
 		}
 	}
+
+	d.warnBaselineHealth(baseline, changes)
 
 	if len(changes) == 0 {
 		d.logger.Println("No changes detected")
@@ -332,8 +357,8 @@ func (d *Daemon) runScan() {
 	newChanges := alertedState.FilterNewChanges(changes)
 
 	// Log all changes detected, but note how many are new
-	d.logger.Printf("Detected %d total changes, %d new (not previously alerted)",
-		len(changes), len(newChanges))
+	d.logger.Printf("Detected %d baseline changes, %d new alert(s), %d change(s) since last scan",
+		len(changes), len(newChanges), len(incrementalChanges))
 
 	// Only alert on NEW changes. Skip the diff too: re-saving an identical
 	// change set every scan fills the disk without adding forensic value.
@@ -342,11 +367,17 @@ func (d *Daemon) runScan() {
 		return
 	}
 
-	// Save diff for forensics (all changes, not just new)
-	if err := d.store.SaveDiff(changes); err != nil {
-		d.logger.Printf("Warning: failed to save diff: %v", err)
+	// Persist only the delta since the previous scan. The baseline may be
+	// intentionally old; re-saving all baseline differences would bury a new
+	// event in stale noise and grow disk usage without bound.
+	if len(incrementalChanges) > 0 {
+		if err := d.store.SaveDiff(incrementalChanges); err != nil {
+			d.logger.Printf("Warning: failed to save incremental diff: %v", err)
+		}
+		d.pruneSnapshots()
+	} else {
+		d.logger.Println("No incremental diff to save (checkpoint was just initialized)")
 	}
-	d.pruneSnapshots()
 
 	// Log and alert on new changes only
 	critical := scanner.FilterBySeverity(newChanges, scanner.SeverityCritical)
@@ -413,6 +444,48 @@ func (d *Daemon) runScan() {
 			// Future: configurable response actions (disconnect network, shutdown)
 		}
 	}
+}
+
+const (
+	baselineStaleAfter           = 30 * 24 * time.Hour
+	baselineDriftWarningFraction = 0.10
+)
+
+// changesSinceLastScan returns only the new movement for the forensic journal.
+// A missing checkpoint intentionally produces no retroactive journal entry;
+// it is initialized from the current scan after this cycle.
+func changesSinceLastScan(lastScan *snapshot.Snapshot, current map[string]*scanner.FileInfo) []scanner.Change {
+	if lastScan == nil {
+		return nil
+	}
+	return scanner.Compare(lastScan.Files, current)
+}
+
+// warnBaselineHealth tells the operator when the trusted baseline is old or
+// overwhelmingly different from the machine. It never silently re-baselines:
+// accepting a changed state is a security decision for the operator to make.
+func (d *Daemon) warnBaselineHealth(baseline *snapshot.Snapshot, changes []scanner.Change) {
+	if d.baselineHealthWarned || baseline == nil {
+		return
+	}
+
+	age := time.Since(baseline.CreatedAt)
+	drift := 0.0
+	if len(baseline.Files) > 0 {
+		drift = float64(len(changes)) / float64(len(baseline.Files))
+	}
+
+	if age < baselineStaleAfter && drift < baselineDriftWarningFraction {
+		return
+	}
+
+	if age >= baselineStaleAfter {
+		d.logger.Printf("Baseline health warning: trusted baseline is %s old. Review 'feelgoodbot diff'; when the current state is trusted, run 'feelgoodbot snapshot'.", age.Round(time.Hour))
+	}
+	if drift >= baselineDriftWarningFraction {
+		d.logger.Printf("Baseline health warning: %.1f%% of monitored files differ from baseline (%d/%d). Review intentional churn with 'feelgoodbot diff' and ignore rules, then run 'feelgoodbot snapshot' only after verifying it.", drift*100, len(changes), len(baseline.Files))
+	}
+	d.baselineHealthWarned = true
 }
 
 // pruneSnapshots enforces the snapshot retention policy and logs the outcome

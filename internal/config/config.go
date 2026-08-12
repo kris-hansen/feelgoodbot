@@ -25,7 +25,7 @@ type Config struct {
 // Example in config.yaml:
 //
 //	snapshots:
-//	  max_disk_usage: 1GB   # total size cap; "0" disables
+//	  max_disk_usage: 250MB # total size cap; "0" disables
 //	  max_age: 720h         # drop diffs older than this; 0 disables
 type SnapshotConfig struct {
 	MaxDiskUsage string        `mapstructure:"max_disk_usage"`
@@ -123,7 +123,7 @@ func DefaultConfig() *Config {
 			},
 		},
 		Snapshots: SnapshotConfig{
-			MaxDiskUsage: "1GB",
+			MaxDiskUsage: "250MB",
 			MaxAge:       30 * 24 * time.Hour,
 		},
 	}

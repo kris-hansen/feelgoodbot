@@ -149,17 +149,24 @@ response:
 
 # Snapshot history retention
 snapshots:
-  max_disk_usage: 1GB   # total size cap for ~/.config/feelgoodbot/snapshots ("0" = no limit)
+  max_disk_usage: 250MB # total size cap for ~/.config/feelgoodbot/snapshots ("0" = no limit)
   max_age: 720h         # drop diff snapshots older than this (0 = no limit)
 ```
 
 ### Snapshot Retention
 
-The daemon saves a diff snapshot (`diff_*.json`) whenever new changes are
-detected, for forensic review. Left unbounded these can fill your disk, so
-retention limits are enforced by default: **1 GB total** and **30 days of
-history**. The daemon prunes on startup and after saving each diff, always
-removing the oldest diffs first. The baseline snapshot is never removed.
+The daemon keeps a trusted baseline for integrity alerts and a separate rolling
+last-scan checkpoint for the forensic journal. Each `diff_*.json` therefore
+contains only what changed since the preceding scan—not every historical change
+since the baseline. This keeps a stale baseline from hiding a new event in a
+repeated multi-megabyte report.
+
+Retention limits are enforced by default: **250 MB total** and **30 days of
+incremental history**. The daemon prunes on startup and after saving each diff,
+always removing the oldest diffs first. The trusted baseline and the rolling
+checkpoint are never removed. When the baseline is older than 30 days or a
+large portion of monitored files differs, `status` and the daemon log a review
+prompt; Feelgoodbot never silently accepts that changed state.
 
 You can also prune manually:
 

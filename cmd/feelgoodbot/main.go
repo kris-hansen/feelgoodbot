@@ -376,7 +376,7 @@ var snapshotPruneCmd = &cobra.Command{
 	Long: `Remove historical diff snapshots according to the retention policy.
 
 Limits come from the config file (snapshots.max_disk_usage, snapshots.max_age)
-unless overridden with flags. The baseline snapshot is never removed.`,
+unless overridden with flags. The baseline and rolling checkpoint are never removed.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		store, err := snapshot.NewStore()
 		if err != nil {
@@ -413,7 +413,7 @@ unless overridden with flags. The baseline snapshot is never removed.`,
 			return fmt.Errorf("failed to inspect snapshot store: %w", err)
 		}
 
-		fmt.Printf("📦 Snapshot store: %s across %d diff(s) + baseline\n", snapshot.FormatSize(usage), diffCount)
+		fmt.Printf("📦 Snapshot store: %s across %d incremental diff(s) + baseline/checkpoint\n", snapshot.FormatSize(usage), diffCount)
 		if policy.MaxBytes > 0 {
 			fmt.Printf("   Max disk usage: %s\n", snapshot.FormatSize(policy.MaxBytes))
 		}
@@ -918,9 +918,14 @@ var statusCmd = &cobra.Command{
 			} else {
 				fmt.Printf("Baseline:    %s (created %s)\n", baseline.ID, baseline.CreatedAt.Format("2006-01-02 15:04"))
 				fmt.Printf("Files:       %d monitored\n", len(baseline.Files))
+				age := time.Since(baseline.CreatedAt).Round(time.Hour)
+				fmt.Printf("Baseline age: %s\n", age)
+				if age >= 30*24*time.Hour {
+					fmt.Println("⚠️  Review 'feelgoodbot diff'; run 'feelgoodbot snapshot' only after verifying current state is trusted.")
+				}
 			}
 			if usage, diffCount, err := store.DiskUsage(); err == nil {
-				fmt.Printf("Snapshots:   %s on disk (%d historical diffs)\n", snapshot.FormatSize(usage), diffCount)
+				fmt.Printf("Snapshots:   %s on disk (%d incremental diffs)\n", snapshot.FormatSize(usage), diffCount)
 			}
 		} else {
 			fmt.Println("Baseline:    not initialized (run 'feelgoodbot init')")
